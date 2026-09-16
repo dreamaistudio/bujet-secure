@@ -1,8 +1,9 @@
-import { CheckCircle, CheckCircle2, Clock, Download, Search, Trash2, FileDown, Pencil } from "lucide-react";
+import { CheckCircle, CheckCircle2, Clock, Download, Search, Trash2, FileDown, Pencil, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Transaction } from "../types";
 import { cn, formatCurrency, formatDate } from "../lib/utils";
 import { jsPDF } from "jspdf";
+import { exportFile, stringToBase64 } from "../lib/fileExport";
 
 interface TransactionsProps {
   transactions: Transaction[];
@@ -13,6 +14,7 @@ interface TransactionsProps {
   businessLedgerName: string;
   personalLedgerName: string;
   onEditClick: (tx: Transaction) => void;
+  onAddTransactionClick: () => void;
 }
 
 interface ClearedToast {
@@ -45,6 +47,7 @@ export function Transactions({
   businessLedgerName,
   personalLedgerName,
   onEditClick,
+  onAddTransactionClick,
 }: TransactionsProps) {
   const [filter, setFilter] = useState<"All" | "Business" | "Personal">("All");
   const [searchQuery, setSearchQuery] = useState("");
@@ -117,35 +120,38 @@ export function Transactions({
     [onMarkCleared]
   );
 
-  const downloadFile = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     if (filteredTxs.length === 0) return;
-    const escapeCSV = (field: string): string => {
-      const escaped = field.replace(/"/g, '""');
-      return `"${escaped}"`;
-    };
-    const headers = ["Date", "Description", "Category", "Amount", "Status"];
-    const rows = filteredTxs.map((tx) => [
-      escapeCSV(tx.date),
-      escapeCSV(tx.description),
-      escapeCSV(tx.category),
-      escapeCSV(tx.amount.toString()),
-      escapeCSV(tx.status)
-    ]);
-    const csv = [headers.map(h => escapeCSV(h)).join(","), ...rows.map((r) => r.join(","))].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const filename = `transactions_${new Date().toISOString().slice(0, 10)}.csv`;
-    downloadFile(blob, filename);
+    try {
+      const escapeCSV = (field: string): string => {
+        const escaped = field.replace(/"/g, '""');
+        return `"${escaped}"`;
+      };
+      const headers = ["Date", "Description", "Category", "Amount", "Status"];
+      const rows = filteredTxs.map((tx) => [
+        escapeCSV(tx.date),
+        escapeCSV(tx.description),
+        escapeCSV(tx.category),
+        escapeCSV(tx.amount.toString()),
+        escapeCSV(tx.status)
+      ]);
+      const csv = [headers.map(h => escapeCSV(h)).join(","), ...rows.map((r) => r.join(","))].join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const now = new Date();
+      const timestamp = `${now.toISOString().slice(0, 10)}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+      const filename = `transactions_${timestamp}.csv`;
+      const base64Data = stringToBase64(csv);
+
+      await exportFile({
+        filename,
+        blob,
+        base64Data,
+        cleanupPattern: /^transactions_.*\.csv$/i,
+      });
+    } catch (err) {
+      console.error("CSV export failed:", err);
+      alert("Failed to export CSV. Please try again.");
+    }
   };
 
   const loadImageAsBase64 = async (url: string): Promise<string> => {
@@ -184,7 +190,7 @@ export function Transactions({
       doc.setFont("helvetica", "bold");
       doc.setFontSize(16);
       doc.setTextColor(20, 20, 20);
-      doc.text("BUJET SECURE - TRANSACTION STATEMENT", 14, 20);
+      doc.text("BUDGET SECURE - TRANSACTION STATEMENT", 14, 20);
 
       // Subtitle - Y=30 (Generated date, gray 100,100,100)
       doc.setFontSize(9);
@@ -363,13 +369,19 @@ export function Transactions({
         doc.text(`Page ${i}`, 196, pageHeight - 18, { align: 'right' });
       }
 
-      // Save using download helper
+      // Save using exportFile helper (native Documents + Share sheet on Android, download on Web/Electron)
       const now = new Date();
       const timestamp = `${now.toISOString().slice(0, 10)}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
       const filename = `finance_statement_${timestamp}.pdf`;
       console.log("Saving PDF as:", filename);
       const blob = doc.output("blob");
-      downloadFile(blob, filename);
+      const base64Data = doc.output("datauristring");
+      await exportFile({
+        filename,
+        blob,
+        base64Data,
+        cleanupPattern: /^(finance_statement_|transactions_).*?\.pdf$/i,
+      });
     } catch (err) {
       console.error("PDF export failed:", err);
       alert("Failed to export PDF. Please try again.");
@@ -407,7 +419,23 @@ export function Transactions({
   }, [ledgerTxs]);
 
   return (
-    <div className="p-6 h-full flex flex-col gap-6 relative">
+    <div className="p-3.5 sm:p-6 h-full flex flex-col gap-3 sm:gap-5 relative overflow-y-auto md:overflow-hidden">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4 shrink-0">
+        <div>
+          <h1 className="text-xl md:text-2xl font-bold text-[var(--color-on-surface)] mb-0.5 tracking-tight">Transaction Management</h1>
+          <p className="text-xs md:text-sm text-[var(--color-on-surface-variant)]">View and manage all transactions</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={onAddTransactionClick}
+            className="h-9 px-4 bg-[var(--color-primary)] text-white text-xs sm:text-sm hover:bg-[var(--color-secondary-variant)] transition-colors rounded font-medium flex items-center gap-2 cursor-pointer shadow-sm"
+          >
+            <Plus size={16} />
+            <span>New Transaction</span>
+          </button>
+        </div>
+      </div>
+
       {/* TABS NAVIGATION */}
       <div className="flex border-b border-[var(--color-outline)] shrink-0 bg-[var(--color-surface-variant)] rounded-t overflow-hidden">
         {[
@@ -421,7 +449,7 @@ export function Transactions({
               key={key}
               onClick={() => setFilter(key as any)}
               className={cn(
-                "flex-1 py-4 text-center text-sm font-bold transition-all border-b-4 cursor-pointer flex items-center justify-center gap-2",
+                "flex-1 py-2.5 sm:py-3.5 text-center text-xs sm:text-sm font-bold transition-all border-b-3 sm:border-b-4 cursor-pointer flex items-center justify-center gap-1.5 sm:gap-2 min-h-[44px]",
                 isActive
                   ? "text-[var(--color-secondary)] border-[var(--color-secondary)] bg-[var(--color-surface)]"
                   : "text-[var(--color-on-surface-variant)] border-transparent hover:text-white hover:bg-[var(--color-surface)]/50"
@@ -441,8 +469,8 @@ export function Transactions({
 
       {/* FILTERED TOTALS SUMMARY BAR */}
       {filter !== "All" && (
-        <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] p-4 rounded shrink-0 flex flex-col gap-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] p-3.5 sm:p-4 rounded shrink-0 flex flex-col gap-2.5 sm:gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4">
             <div>
               <h3 className="text-sm font-bold text-[var(--color-on-surface)] flex items-center gap-1.5">
                 {filter === "Business" ? "💼" : "👤"} {filter === "Business" ? businessLedgerName : personalLedgerName}
@@ -451,7 +479,8 @@ export function Transactions({
                 Current ledger overview (all search queries match)
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-xs md:text-sm">
+            {/* Desktop / Tablet summary stats row */}
+            <div className="hidden sm:flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-xs md:text-sm">
               <div>
                 <span className="text-[var(--color-on-surface-variant)]">Income: </span>
                 <span className="text-[var(--color-secondary)] font-bold">{formatCurrency(summaryTotals.income, currency).fullVal}</span>
@@ -466,8 +495,25 @@ export function Transactions({
               </div>
             </div>
           </div>
+
+          {/* Mobile compact 3-column stats bar */}
+          <div className="grid grid-cols-3 gap-2 sm:hidden font-mono pt-1">
+            <div className="bg-[var(--color-surface)] border border-[var(--color-outline)]/60 rounded p-2 text-center">
+              <span className="text-[10px] uppercase font-bold text-[var(--color-on-surface-variant)] block mb-0.5">Income</span>
+              <span className="text-[11px] text-[var(--color-secondary)] font-bold block truncate">{formatCurrency(summaryTotals.income, currency).fullVal}</span>
+            </div>
+            <div className="bg-[var(--color-surface)] border border-[var(--color-outline)]/60 rounded p-2 text-center">
+              <span className="text-[10px] uppercase font-bold text-[var(--color-on-surface-variant)] block mb-0.5">Expenses</span>
+              <span className="text-[11px] text-[var(--color-error)] font-bold block truncate">{formatCurrency(-summaryTotals.expense, currency).fullVal}</span>
+            </div>
+            <div className={cn("border rounded p-2 text-center", summaryTotals.net >= 0 ? "bg-green-900/20 border-[#22c55e]/30 text-[#22c55e]" : "bg-red-900/20 border-[#ef4444]/30 text-[#ef4444]")}>
+              <span className="text-[10px] uppercase font-bold opacity-80 block mb-0.5">Net</span>
+              <span className="text-[11px] font-bold block truncate">{formatCurrency(summaryTotals.net, currency).fullVal}</span>
+            </div>
+          </div>
+
           {summaryTotals.hasPending && (
-            <div className="border-t border-[var(--color-outline)] pt-2.5 flex justify-end">
+            <div className="border-t border-[var(--color-outline)] pt-2 flex justify-end">
               <span className="text-xs font-mono text-[#f59e0b] font-bold flex items-center gap-1">
                 ⏳ Pending: {formatCurrency(summaryTotals.pendingNet, currency).fullVal} (not included in balance)
               </span>
@@ -477,11 +523,11 @@ export function Transactions({
       )}
 
       {/* SEARCH & EXPORT ACTIONS */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shrink-0 bg-[var(--color-surface-variant)] border border-[var(--color-outline)] p-4 rounded">
-        <div className="flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4 shrink-0 bg-[var(--color-surface-variant)] border border-[var(--color-outline)] p-3 sm:p-4 rounded">
+        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full sm:w-auto">
           <div className="flex flex-col gap-1 w-full sm:w-auto">
             <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase">Search Description</label>
-            <div className="flex border border-[var(--color-outline)] rounded bg-[var(--color-surface)] focus-within:border-[var(--color-primary)] items-center px-2 h-[34px] w-full sm:w-[280px]">
+            <div className="flex border border-[var(--color-outline)] rounded bg-[var(--color-surface)] focus-within:border-[var(--color-primary)] items-center px-2.5 h-[38px] w-full sm:w-[280px]">
               <Search size={16} className="text-[var(--color-on-surface-variant)] mr-2 shrink-0" />
               <input
                 type="text"
@@ -498,7 +544,7 @@ export function Transactions({
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as any)}
-              className="bg-[#09090b] border border-[#27272a] text-[#fafafa] rounded px-3 py-1.5 text-sm h-[34px] outline-none cursor-pointer"
+              className="bg-[#09090b] border border-[#27272a] text-[#fafafa] rounded px-3 py-1.5 text-sm h-[38px] outline-none cursor-pointer"
             >
               <option value="latest">Latest First</option>
               <option value="oldest">Oldest First</option>
@@ -510,153 +556,156 @@ export function Transactions({
           </div>
         </div>
 
-        <div className="flex gap-2 w-full sm:w-auto justify-end">
+        <div className="flex gap-2 w-full sm:w-auto justify-end pt-1 sm:pt-0">
           <button
             onClick={handleExportCSV}
-            className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] px-3 py-1.5 text-sm rounded hover:bg-[var(--color-outline)] transition-colors flex items-center gap-2 cursor-pointer text-white"
+            className="flex-1 sm:flex-none justify-center bg-[var(--color-surface-variant)] border border-[var(--color-outline)] px-3 py-2 text-xs sm:text-sm rounded hover:bg-[var(--color-outline)] transition-colors flex items-center gap-2 cursor-pointer text-white min-h-[38px]"
           >
-            <Download size={16} />
-            Export CSV
+            <Download size={15} />
+            <span>Export CSV</span>
           </button>
           <button
             onClick={handleExportPDF}
-            className="bg-[var(--color-surface-variant)] border border-[var(--color-secondary)]/30 text-[var(--color-secondary)] px-3 py-1.5 text-sm rounded hover:bg-[var(--color-secondary)]/10 transition-colors flex items-center gap-2 cursor-pointer"
+            className="flex-1 sm:flex-none justify-center bg-[var(--color-surface-variant)] border border-[var(--color-secondary)]/30 text-[var(--color-secondary)] px-3 py-2 text-xs sm:text-sm rounded hover:bg-[var(--color-secondary)]/10 transition-colors flex items-center gap-2 cursor-pointer min-h-[38px]"
           >
-            <FileDown size={16} />
-            Export PDF
+            <FileDown size={15} />
+            <span>Export PDF</span>
           </button>
         </div>
       </div>
 
-      {/* TABLE CONTAINER */}
-      <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded overflow-hidden flex-1 flex flex-col min-h-0">
-        <div className="overflow-auto flex-1 flex flex-col">
-          <table className="w-full text-left border-collapse min-w-[800px]">
-            <thead className="sticky top-0 bg-[var(--color-surface-variant)] z-10 shadow-sm border-b border-[var(--color-outline)]">
-              <tr>
-                <th className="py-3 px-4 text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase border-r border-[var(--color-outline)] w-[140px]">Date</th>
-                <th className="py-3 px-4 text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase border-r border-[var(--color-outline)]">Description</th>
-                <th className="py-3 px-4 text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase border-r border-[var(--color-outline)] w-[140px]">Category</th>
-                <th className="py-3 px-4 text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase border-r border-[var(--color-outline)] w-[160px] text-right">Amount ({currency})</th>
-                <th className="py-3 px-4 text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase border-r border-[var(--color-outline)] w-[120px]">Status</th>
-                <th className="py-3 px-4 text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase w-[140px] text-center">Action</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono text-[13px] text-[var(--color-on-surface)]">
-              {filteredTxs.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="py-8 text-center text-[var(--color-on-surface-variant)]">
-                    No transactions found.
-                  </td>
-                </tr>
-              ) : (
-                filteredTxs.map((tx, idx) => {
-                  const amt = formatCurrency(tx.amount, currency);
-                  return (
-                    <tr
-                      key={tx.id}
-                      className={cn(
-                        "hover:bg-[var(--color-surface-variant)] transition-colors cursor-default border-b border-[var(--color-outline)] group",
-                        idx % 2 === 0 ? "bg-[var(--color-surface)]" : "bg-[var(--color-surface-lowest)]"
-                      )}
-                    >
-                      <td className={cn(
-                        "py-3 px-4 border-r border-[var(--color-outline)] text-[var(--color-on-surface-variant)] border-l-4",
-                        tx.category === "Business" ? "border-l-[#22c55e]" : "border-l-[#3b82f6]"
-                      )}>
-                        {formatDate(tx.date)}{tx.time ? ` ${formatTxTime(tx.time)}` : ""}
-                      </td>
-                      <td className="py-3 px-4 border-r border-[var(--color-outline)]">
-                        <div className="flex items-center gap-1.5">
-                          {tx.status === 'PENDING' && (
-                            <span className="inline-flex items-center gap-0.5 text-[#ef4444] text-[10px] font-bold uppercase shrink-0">
-                              <Clock size={10} className="text-[#ef4444]" />
-                              PENDING
-                            </span>
+      {/* TRANSACTION CARD LIST */}
+      <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded flex flex-col shrink-0 md:flex-1 md:min-h-0 md:overflow-hidden pb-4 md:pb-0">
+        <div className="p-3 sm:p-4 space-y-3 md:overflow-y-auto md:flex-1">
+          {filteredTxs.length === 0 ? (
+            <div className="py-16 text-center text-[var(--color-on-surface-variant)] flex flex-col items-center justify-center gap-2">
+              <p className="text-sm font-medium">No transactions found</p>
+              <p className="text-xs text-[var(--color-on-surface-variant)]/70">Try adjusting your filters or search terms</p>
+            </div>
+          ) : (
+            filteredTxs.map((tx) => {
+              const amt = formatCurrency(tx.amount, currency);
+              const isIncome = tx.amount >= 0;
+              const isBusiness = tx.category === "Business";
+
+              return (
+                <div
+                  key={tx.id}
+                  className={cn(
+                    "bg-[var(--color-surface)] border border-[var(--color-outline)] rounded-lg p-3.5 sm:p-4 transition-all hover:border-[var(--color-outline-variant)] flex flex-col gap-3 relative overflow-hidden group shadow-sm",
+                    isBusiness ? "border-l-4 border-l-[#22c55e]" : "border-l-4 border-l-[#3b82f6]"
+                  )}
+                >
+                  {/* Top Row: Description & Amount */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                        <span
+                          className={cn(
+                            "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider font-mono",
+                            isBusiness
+                              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                              : "bg-blue-500/10 text-blue-400 border border-blue-500/30"
                           )}
-                          <span className="truncate">{tx.description}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 border-r border-[var(--color-outline)]">{tx.category}</td>
-                      <td
+                        >
+                          {isBusiness ? `💼 ${businessLedgerName}` : `👤 ${personalLedgerName}`}
+                        </span>
+
+                        {tx.status === "PENDING" ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/30 font-mono">
+                            <Clock size={10} className="text-amber-400" />
+                            Pending
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                            <CheckCircle2 size={10} className="text-emerald-400" />
+                            Cleared
+                          </span>
+                        )}
+
+                        <span className="text-[11px] font-mono text-[var(--color-on-surface-variant)]">
+                          {formatDate(tx.date)}{tx.time ? ` • ${formatTxTime(tx.time)}` : ""}
+                        </span>
+                      </div>
+
+                      <h4 className="text-sm sm:text-base font-semibold text-[var(--color-on-surface)] break-words leading-snug">
+                        {tx.description}
+                      </h4>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <div
                         className={cn(
-                          "py-3 px-4 border-r border-[var(--color-outline)] text-right",
-                          tx.amount < 0 ? "text-[var(--color-error)]" : "text-[var(--color-secondary)]"
+                          "font-mono text-base sm:text-lg font-bold tracking-tight",
+                          isIncome ? "text-[var(--color-secondary)]" : "text-[var(--color-error)]"
                         )}
                       >
                         {amt.value}
-                      </td>
-                      <td className="py-3 px-4 border-r border-[var(--color-outline)]">
-                        {tx.status === "CLEARED" ? (
-                          <span className="inline-block px-2 py-0.5 bg-[var(--color-surface-variant)] border border-[var(--color-secondary)] text-[var(--color-secondary)] text-[10px] uppercase font-bold tracking-wider">
-                            Cleared
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions Row */}
+                  <div className="flex items-center justify-between pt-2.5 border-t border-[var(--color-outline)]/60 text-xs">
+                    <div>
+                      {tx.status === 'PENDING' && confirmingId !== tx.id && (
+                        <button
+                          onClick={() => setConfirmingId(tx.id)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#22c55e] text-black text-xs font-bold hover:bg-[#16a34a] active:scale-95 transition-all shadow-sm cursor-pointer"
+                        >
+                          <CheckCircle2 size={14} />
+                          <span>Mark Received</span>
+                        </button>
+                      )}
+                      {tx.status === 'PENDING' && confirmingId === tx.id && (
+                        <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-700 px-2.5 py-1.5 rounded">
+                          <span className="text-[11px] text-zinc-300 font-medium">
+                            Confirm received?
                           </span>
-                        ) : (
-                          <span className="inline-block px-2 py-0.5 bg-[var(--color-surface-variant)] border border-yellow-500 text-yellow-500 text-[10px] uppercase font-bold tracking-wider">
-                            Pending
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          {tx.status === 'PENDING' && confirmingId !== tx.id && (
-                            <button
-                              onClick={() => setConfirmingId(tx.id)}
-                              title="Mark as received"
-                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#22c55e] text-black text-xs font-bold hover:bg-[#16a34a] active:scale-95 transition-all shadow-sm hover:shadow-md cursor-pointer pulse-action"
-                            >
-                              <CheckCircle2 size={14} />
-                              Mark Received
-                            </button>
-                          )}
-                          {tx.status === 'PENDING' && confirmingId === tx.id && (
-                            <div className="flex flex-col items-center gap-1">
-                              <span className="text-[10px] text-[var(--color-on-surface-variant)] whitespace-nowrap">
-                                Confirm {formatCurrency(Math.abs(tx.amount), currency).fullVal} received?
-                              </span>
-                              <div className="flex gap-1">
-                                <button
-                                  onClick={() => handleMarkReceived(tx)}
-                                  className="text-[10px] px-2.5 py-0.5 rounded bg-[#22c55e] text-black font-bold cursor-pointer hover:bg-[#16a34a] transition-colors"
-                                >
-                                  Yes
-                                </button>
-                                <button
-                                  onClick={() => setConfirmingId(null)}
-                                  className="text-[10px] px-2.5 py-0.5 rounded border border-[var(--color-outline)] text-[var(--color-on-surface-variant)] cursor-pointer hover:text-white hover:border-[var(--color-on-surface-variant)] transition-colors"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          )}
                           <button
-                            onClick={() => onEditClick(tx)}
-                            className="p-1.5 rounded-md opacity-0 group-hover:opacity-100 hover:bg-[#27272a] text-[#a1a1aa] hover:text-[#fafafa] transition-all cursor-pointer flex items-center justify-center shrink-0"
-                            title="Edit transaction"
+                            onClick={() => handleMarkReceived(tx)}
+                            className="text-[11px] px-2.5 py-1 rounded bg-[#22c55e] text-black font-bold cursor-pointer hover:bg-[#16a34a]"
                           >
-                            <Pencil size={14} />
+                            Yes
                           </button>
                           <button
-                            onClick={() => handleDelete(tx)}
-                            title="Delete transaction"
-                            className="text-[var(--color-on-surface-variant)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-error)] transition-all p-1 rounded cursor-pointer flex items-center justify-center shrink-0"
+                            onClick={() => setConfirmingId(null)}
+                            className="text-[11px] px-2.5 py-1 rounded border border-zinc-600 text-zinc-400 cursor-pointer hover:text-white"
                           >
-                            <Trash2 size={15} />
+                            Cancel
                           </button>
                         </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 ml-auto">
+                      <button
+                        onClick={() => onEditClick(tx)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[var(--color-surface-variant)] hover:bg-zinc-800 text-[var(--color-on-surface)] transition-colors cursor-pointer text-xs font-medium border border-[var(--color-outline)] min-h-[36px]"
+                        title="Edit transaction"
+                      >
+                        <Pencil size={13} />
+                        <span>Edit</span>
+                      </button>
+                      <button
+                        onClick={() => handleDelete(tx)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[var(--color-surface-variant)] hover:bg-red-950/40 text-[var(--color-on-surface-variant)] hover:text-red-400 transition-colors cursor-pointer text-xs font-medium border border-[var(--color-outline)] min-h-[36px]"
+                        title="Delete transaction"
+                      >
+                        <Trash2 size={13} />
+                        <span>Delete</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
 
         <div className="bg-[var(--color-surface-variant)] border-t border-[var(--color-outline)] p-3 flex justify-between items-center shrink-0">
-          <span className="text-sm text-[var(--color-on-surface-variant)]">
-            {filteredTxs.length === 0 ? "No transactions" : `Showing ${filteredTxs.length} transaction${filteredTxs.length !== 1 ? "s" : ""}`}
+          <span className="text-xs sm:text-sm text-[var(--color-on-surface-variant)] font-mono">
+            {filteredTxs.length === 0 ? "0 transactions" : `Showing ${filteredTxs.length} transaction${filteredTxs.length !== 1 ? "s" : ""}`}
           </span>
         </div>
       </div>

@@ -205,7 +205,7 @@ export function Dashboard({
       : summary.netBalance;
 
     return (
-      <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded flex flex-col overflow-hidden h-full">
+      <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded flex flex-col">
         {/* Header */}
         <div className="bg-[var(--color-surface)] p-4 border-b border-[var(--color-outline)] flex justify-between items-center shrink-0">
           <div className="flex items-center gap-2">
@@ -217,7 +217,7 @@ export function Dashboard({
           </span>
         </div>
 
-        <div className="p-4 flex flex-col gap-6 flex-1 overflow-hidden">
+        <div className="p-3.5 sm:p-4 flex flex-col gap-4 sm:gap-6">
           {/* Key Stats */}
           <div className="flex flex-col gap-2 shrink-0">
             <div className="grid grid-cols-3 gap-4">
@@ -254,7 +254,7 @@ export function Dashboard({
           </div>
 
           {/* Chart Area */}
-          <div className="bg-[var(--color-surface)] border border-[var(--color-outline)] h-48 min-h-[150px] rounded relative overflow-hidden flex flex-col p-4 shrink-0">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-outline)] h-56 sm:h-52 min-h-[200px] rounded relative overflow-hidden flex flex-col p-3.5 sm:p-4 shrink-0">
             <div className="absolute inset-0 flex flex-col justify-between p-4 pointer-events-none opacity-20">
               <div className="w-full border-t border-[var(--color-outline)] border-dashed"></div>
               <div className="w-full border-t border-[var(--color-outline)] border-dashed"></div>
@@ -262,10 +262,20 @@ export function Dashboard({
               <div className="w-full border-t border-[var(--color-outline)] border-dashed"></div>
             </div>
 
-            <div className="flex justify-between items-center mb-2 relative z-10">
-              <div className="flex items-center gap-3">
-                <p className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase">CUMULATIVE TREND</p>
-                <div className="flex gap-1 bg-[var(--color-surface-lowest)] border border-[var(--color-outline)] p-0.5 rounded-full shrink-0">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 relative z-10">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase shrink-0">
+                  CUMULATIVE TREND
+                </p>
+                <div className={cn("sm:hidden px-2 py-0.5 border rounded", summary.growthTrend >= 0 ? "bg-green-900/30 border-[var(--color-secondary)]" : "bg-red-900/30 border-[var(--color-error)]")}>
+                  <p className={cn("font-mono text-[10px]", summary.growthTrend >= 0 ? "text-[var(--color-secondary)]" : "text-[var(--color-error)]")}>
+                    {summary.growthTrend >= 0 ? "+" : ""}{summary.growthTrend}%
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between sm:justify-end gap-2 overflow-x-auto no-scrollbar">
+                <div className="flex gap-0.5 sm:gap-1 bg-[var(--color-surface-lowest)] border border-[var(--color-outline)] p-0.5 rounded-full shrink-0">
                   {(["1W", "1M", "3M", "6M", "1Y", "ALL"] as const).map((p) => {
                     const isActive = period === p;
                     return (
@@ -273,7 +283,7 @@ export function Dashboard({
                         key={p}
                         onClick={() => setPeriod(p)}
                         className={cn(
-                          "px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wide transition-all uppercase cursor-pointer",
+                          "px-2 sm:px-2.5 py-1 rounded-full text-[9px] sm:text-[10px] font-bold tracking-wide transition-all uppercase cursor-pointer min-w-[28px] text-center",
                           isActive
                             ? "bg-[var(--color-secondary)] text-[var(--color-on-secondary)]"
                             : "text-[var(--color-on-surface-variant)] hover:text-[var(--color-on-surface)]"
@@ -284,11 +294,11 @@ export function Dashboard({
                     );
                   })}
                 </div>
-              </div>
-              <div className={cn("px-2 py-1 border rounded", summary.growthTrend >= 0 ? "bg-green-900/30 border-[var(--color-secondary)]" : "bg-red-900/30 border-[var(--color-error)]")}>
-                <p className={cn("font-mono text-[11px]", summary.growthTrend >= 0 ? "text-[var(--color-secondary)]" : "text-[var(--color-error)]")}>
-                  {summary.growthTrend >= 0 ? "+" : ""}{summary.growthTrend}%
-                </p>
+                <div className={cn("hidden sm:block px-2 py-1 border rounded shrink-0", summary.growthTrend >= 0 ? "bg-green-900/30 border-[var(--color-secondary)]" : "bg-red-900/30 border-[var(--color-error)]")}>
+                  <p className={cn("font-mono text-[11px]", summary.growthTrend >= 0 ? "text-[var(--color-secondary)]" : "text-[var(--color-error)]")}>
+                    {summary.growthTrend >= 0 ? "+" : ""}{summary.growthTrend}%
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -381,7 +391,7 @@ export function Dashboard({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 shrink-0">
         <div>
           <h1 className="text-xl md:text-2xl font-bold text-[var(--color-on-surface)] mb-1 tracking-tight">Financial Overview</h1>
-          <p className="text-xs md:text-sm text-[var(--color-on-surface-variant)]">System Status: Active | Last Synced: Today {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+          <p className="text-xs md:text-sm text-[var(--color-on-surface-variant)]">System Status: Active</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -432,7 +442,7 @@ export function Dashboard({
         );
       })()}
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 flex-1 min-h-0">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 pb-6">
         {renderLedgerCard(businessLedgerName, "Business", businessSummary, chartDataBusiness, recentBTxs, businessPeriod, setBusinessPeriod, filteredBTxs)}
         {renderLedgerCard(personalLedgerName, "Personal", personalSummary, chartDataPersonal, recentPTxs, personalPeriod, setPersonalPeriod, filteredPTxs)}
       </div>

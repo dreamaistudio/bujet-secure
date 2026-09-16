@@ -7,7 +7,7 @@ interface SplashScreenProps {
 export function SplashScreen({ onComplete }: SplashScreenProps) {
   const [visible, setVisible] = useState(true);
 
-  const videoSrc = 'http://localhost:3001/assets/welcome.mp4';
+  const videoSrc = '/assets/welcome.mp4';
 
   useEffect(() => {
     const timeout = setTimeout(() => {

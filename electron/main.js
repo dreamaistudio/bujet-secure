@@ -12,12 +12,15 @@ ipcMain.handle('get-app-version', () => {
 
 // Configure autoUpdater
 autoUpdater.autoDownload = false; // ask user before downloading
+autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.forceDevUpdateConfig = true;
 
 let updateCheckInProgress = false;
 
 function checkForUpdates(manual = false) {
   if (updateCheckInProgress) return;
   updateCheckInProgress = true;
+  console.log('=== CHECK FOR UPDATES CALLED ===, manual:', manual);
   autoUpdater.checkForUpdates().finally(() => {
     updateCheckInProgress = false;
   });
@@ -27,19 +30,14 @@ function checkForUpdates(manual = false) {
 }
 
 autoUpdater.on('update-available', (info) => {
-  dialog.showMessageBox({
-    type: 'info',
-    title: 'Update Available',
-    message: `Version ${info.version} is available. Download now?`,
-    buttons: ['Download', 'Later']
-  }).then((result) => {
-    if (result.response === 0) {
-      autoUpdater.downloadUpdate();
-    }
-  });
+  console.log('=== UPDATE AVAILABLE ===', info.version);
+  if (mainWindow) {
+    mainWindow.webContents.send('update-status', { status: 'available', version: info.version });
+  }
 });
 
 autoUpdater.on('update-not-available', () => {
+  console.log('=== UPDATE NOT AVAILABLE ===');
   if (mainWindow) {
     mainWindow.webContents.send('update-status', 
       { status: 'not-available' });
@@ -47,26 +45,26 @@ autoUpdater.on('update-not-available', () => {
 });
 
 autoUpdater.on('download-progress', (progress) => {
+  console.log(`=== DOWNLOAD PROGRESS: ${progress.percent}% (${progress.transferred}/${progress.total} bytes, speed: ${progress.bytesPerSecond} B/s) ===`);
   if (mainWindow) {
     mainWindow.webContents.send('update-status', 
       { status: 'downloading', percent: progress.percent });
   }
 });
 
-autoUpdater.on('update-downloaded', () => {
-  dialog.showMessageBox({
-    type: 'info',
-    title: 'Update Ready',
-    message: 'Update downloaded. Restart now to install?',
-    buttons: ['Restart Now', 'Later']
-  }).then((result) => {
-    if (result.response === 0) {
-      autoUpdater.quitAndInstall();
-    }
-  });
+autoUpdater.on('update-downloaded', (info) => {
+  console.log('=== UPDATE DOWNLOADED EVENT FIRED ===');
+  if (mainWindow) {
+    mainWindow.webContents.send('update-status', 
+      { status: 'downloaded', version: info.version });
+  }
 });
 
 autoUpdater.on('error', (err) => {
+  console.error('=== AUTO-UPDATE ERROR DETAILS ===');
+  console.error('Message:', err.message);
+  console.error('Stack:', err.stack);
+  console.error('Full error:', JSON.stringify(err, null, 2));
   if (mainWindow) {
     mainWindow.webContents.send('update-status', 
       { status: 'error', message: err.message });
@@ -77,6 +75,16 @@ autoUpdater.on('error', (err) => {
 ipcMain.handle('manual-check-updates', () => {
   checkForUpdates(true);
   return true;
+});
+
+ipcMain.handle('download-update', () => {
+  console.log('=== IPC DOWNLOAD UPDATE CALLED ===');
+  autoUpdater.downloadUpdate();
+});
+
+ipcMain.handle('restart-app', () => {
+  console.log('=== IPC RESTART APP CALLED ===');
+  autoUpdater.quitAndInstall();
 });
 
 let mainWindow = null;
@@ -130,7 +138,7 @@ function startExpressServer() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    title: 'Bujet Secure',
+    title: 'Budget Secure',
     width: 1200,
     height: 800,
     minWidth: 900,
@@ -194,7 +202,7 @@ function createTrayIcon() {
     }
   ]);
 
-  tray.setToolTip('Bujet Secure');
+  tray.setToolTip('Budget Secure');
   tray.setContextMenu(contextMenu);
 
   tray.on('double-click', () => {

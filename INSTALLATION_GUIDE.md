@@ -1,13 +1,13 @@
-# Bujet Secure — Installation Guide
+# Budget Secure — Installation Guide
 
-Thank you for choosing Bujet Secure! Because this app is built as a custom local tool, Windows SmartScreen or Smart App Control may flag the installer as "unsigned" or "unknown" on the first run. 
+Thank you for choosing Budget Secure! Because this app is built as a custom local tool, Windows SmartScreen or Smart App Control may flag the installer as "unsigned" or "unknown" on the first run. 
 
 Please follow these quick steps to safely install and run the app:
 
 ## How to Bypass the SmartScreen Block
 
 ### Method 1: The Properties Menu (Recommended for a clean installation)
-1. Locate the downloaded file: `Bujet Secure Setup 0.0.0.exe` (or the portable `Bujet Secure 0.0.0.exe`).
+1. Locate the downloaded file: `Budget Secure Setup 0.0.0.exe` (or the portable `Budget Secure 0.0.0.exe`).
 2. Right-click the file and select **Properties** from the context menu.
 3. In the **General** tab, look at the bottom section under **Security**.
 4. Check the **Unblock** box.
@@ -24,4 +24,4 @@ Please follow these quick steps to safely install and run the app:
 ---
 
 ## Why does this warning appear?
-Bujet Secure values privacy above all else. All your transactions are stored in a local SQLite database that never leaves your machine. To keep this tool entirely free and independent, we sign it with a local developer certificate rather than paying annual fees for third-party commercial authority signatures. Rest assured, the app is 100% safe to run.
+Budget Secure values privacy above all else. All your transactions are stored in a local SQLite database that never leaves your machine. To keep this tool entirely free and independent, we sign it with a local developer certificate rather than paying annual fees for third-party commercial authority signatures. Rest assured, the app is 100% safe to run.

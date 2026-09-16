@@ -1,9 +1,9 @@
 import { Globe, Save, ShieldCheck, ShieldAlert, Building2, Check, Trash2, Eye, EyeOff, Copy } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
-import QRCode from 'qrcode';
+import { getCurrentAppVersion, getAppPlatform, checkAndroidUpdate } from "../lib/appUpdater";
+import { triggerAppUpdate } from "../components/UpdateNotification";
 
 interface SettingsProps {
-  businessName: string;
   authPin: string;
   biometricEnabled: boolean;
   currency: string;
@@ -11,7 +11,6 @@ interface SettingsProps {
   businessLedgerName: string;
   personalLedgerName: string;
   onSave: (settings: {
-    businessName: string;
     authPin: string;
     biometricEnabled: boolean;
     currency: string;
@@ -22,14 +21,11 @@ interface SettingsProps {
   onStartFresh: () => void;
   
   // Desktop app props
-  localIp?: string;
-  authToken?: string;
   autoStart?: boolean;
   onToggleAutoStart?: (val: boolean) => void;
 }
 
 export function Settings({
-  businessName,
   authPin,
   biometricEnabled,
   currency,
@@ -38,13 +34,10 @@ export function Settings({
   personalLedgerName,
   onSave,
   onStartFresh,
-  localIp,
-  authToken,
   autoStart,
   onToggleAutoStart,
 }: SettingsProps) {
   // Draft state for form
-  const [draftName, setDraftName] = useState(businessName);
   const [draftPin, setDraftPin] = useState(authPin);
   const [draftBio, setDraftBio] = useState(biometricEnabled);
   const [draftCurrency, setDraftCurrency] = useState(currency);
@@ -53,32 +46,32 @@ export function Settings({
   const [draftPersonalLedgerName, setDraftPersonalLedgerName] = useState(personalLedgerName);
   const [saved, setSaved] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
-  const [appVersion, setAppVersion] = useState("Web Version");
+  const [appVersion, setAppVersion] = useState("Loading...");
   const [updateStatus, setUpdateStatus] = useState<string>('');
   const [checking, setChecking] = useState(false);
 
   useEffect(() => {
-    const win = window as any;
-    if (win.electronAPI && typeof win.electronAPI.getAppVersion === "function") {
-      win.electronAPI
-        .getAppVersion()
-        .then((ver: string) => {
-          setAppVersion(`Version ${ver}`);
-        })
-        .catch(() => {
-          setAppVersion("Web Version");
-        });
-    }
+    getCurrentAppVersion()
+      .then((ver) => {
+        setAppVersion(`Version ${ver}`);
+      })
+      .catch(() => {
+        setAppVersion("Version 1.0");
+      });
   }, []);
 
   useEffect(() => {
-    if (window.electronAPI?.onUpdateStatus) {
-      window.electronAPI.onUpdateStatus((data: any) => {
+    const api = (window as any).electronAPI;
+    if (api?.onUpdateStatus) {
+      api.onUpdateStatus((data: any) => {
         if (data.status === 'not-available') {
           setUpdateStatus('You are on the latest version!');
           setChecking(false);
         } else if (data.status === 'downloading') {
-          setUpdateStatus(`Downloading update: ${Math.round(data.percent)}%`);
+          setUpdateStatus(`Downloading update: ${Math.round(data.percent || 0)}%`);
+        } else if (data.status === 'downloaded') {
+          setUpdateStatus(`Version ${data.version} downloaded! Restart the app to install.`);
+          setChecking(false);
         } else if (data.status === 'error') {
           setUpdateStatus('Update check failed. Try again later.');
           setChecking(false);
@@ -90,54 +83,57 @@ export function Settings({
   const handleCheckUpdates = async () => {
     setChecking(true);
     setUpdateStatus('Checking for updates...');
-    if (window.electronAPI?.checkForUpdates) {
-      await window.electronAPI.checkForUpdates();
+    const platform = getAppPlatform();
+
+    if (platform === 'electron') {
+      const api = (window as any).electronAPI;
+      if (api?.checkForUpdates) {
+        await api.checkForUpdates();
+      } else {
+        setUpdateStatus('Update check unavailable in this mode.');
+        setChecking(false);
+      }
+    } else if (platform === 'android') {
+      try {
+        const result = await checkAndroidUpdate();
+        setChecking(false);
+        if (result.hasUpdate && result.latestVersion && result.downloadUrl) {
+          setUpdateStatus(`Update v${result.latestVersion} found!`);
+          triggerAppUpdate({
+            status: 'available',
+            version: result.latestVersion,
+            downloadUrl: result.downloadUrl,
+          });
+        } else {
+          setUpdateStatus(`You are on the latest version (${result.currentVersion})!`);
+        }
+      } catch (err) {
+        console.error('Check android update error:', err);
+        setChecking(false);
+        setUpdateStatus('Could not check updates. Check internet connection.');
+      }
     } else {
-      setUpdateStatus('Update check unavailable in this mode.');
       setChecking(false);
+      setUpdateStatus('In-app updates are available on Android and Desktop.');
     }
   };
 
-  const [copiedUrl, setCopiedUrl] = useState(false);
-  const [copiedToken, setCopiedToken] = useState(false);
-  const [showToken, setShowToken] = useState(false);
-  const [qrCodeUrl, setQrCodeUrl] = useState("");
-
-  useEffect(() => {
-    if (localIp && authToken) {
-      const data = JSON.stringify({ ip: localIp, token: authToken });
-      QRCode.toDataURL(data, {
-        width: 180,
-        margin: 2,
-        color: {
-          dark: '#ffffff', // High contrast white code
-          light: '#18181b' // Dark background matching the panel-surface
-        }
-      })
-      .then(url => setQrCodeUrl(url))
-      .catch(err => console.error("Error generating QR code:", err));
-    }
-  }, [localIp, authToken]);
-
   // Sync drafts when upstream props change (e.g. on mount)
   useEffect(() => {
-    setDraftName(businessName);
     setDraftPin(authPin);
     setDraftBio(biometricEnabled);
     setDraftCurrency(currency);
     setDraftLockTimer(lockTimer);
     setDraftBusinessLedgerName(businessLedgerName);
     setDraftPersonalLedgerName(personalLedgerName);
-  }, [businessName, authPin, biometricEnabled, currency, lockTimer, businessLedgerName, personalLedgerName]);
+  }, [authPin, biometricEnabled, currency, lockTimer, businessLedgerName, personalLedgerName]);
 
   const pinError = draftPin.length > 0 && draftPin.length < 4 ? "PIN must be exactly 4 digits." : "";
-  const nameError = draftName.trim().length === 0 ? "Business name cannot be empty." : "";
   const bLedgerError = draftBusinessLedgerName.trim().length === 0 ? "Business ledger name cannot be empty." : "";
   const pLedgerError = draftPersonalLedgerName.trim().length === 0 ? "Personal ledger name cannot be empty." : "";
-  const canSave = !pinError && !nameError && !bLedgerError && !pLedgerError;
+  const canSave = !pinError && !bLedgerError && !pLedgerError;
 
   const handleDiscard = useCallback(() => {
-    setDraftName(businessName);
     setDraftPin(authPin);
     setDraftBio(biometricEnabled);
     setDraftCurrency(currency);
@@ -145,12 +141,11 @@ export function Settings({
     setDraftBusinessLedgerName(businessLedgerName);
     setDraftPersonalLedgerName(personalLedgerName);
     setSaved(false);
-  }, [businessName, authPin, biometricEnabled, currency, lockTimer, businessLedgerName, personalLedgerName]);
+  }, [authPin, biometricEnabled, currency, lockTimer, businessLedgerName, personalLedgerName]);
 
   const handleSave = () => {
     if (!canSave) return;
     onSave({
-      businessName: draftName.trim(),
       authPin: draftPin,
       biometricEnabled: draftBio,
       currency: draftCurrency,
@@ -170,32 +165,6 @@ export function Settings({
           <p className="text-sm text-[var(--color-on-surface-variant)]">Manage localization, security protocols, and data privacy controls.</p>
         </div>
 
-        {/* General Details */}
-        <section className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-lg p-6">
-          <div className="flex items-center gap-2 mb-6 border-b border-[var(--color-outline)] pb-2">
-            <Building2 className="text-[var(--color-primary)]" size={20} />
-            <h3 className="text-[11px] font-bold tracking-wider text-[var(--color-on-surface)] uppercase">General Details</h3>
-          </div>
-          <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h4 className="font-semibold text-base text-[var(--color-on-surface)]">Business Name</h4>
-                <p className="text-[13px] text-[var(--color-on-surface-variant)]">The primary name displayed in your workspace.</p>
-              </div>
-              <div className="w-full sm:w-64">
-                <input
-                  type="text"
-                  value={draftName}
-                  onChange={(e) => setDraftName(e.target.value)}
-                  className="w-full bg-[var(--color-background)] border border-[var(--color-outline)] text-[var(--color-on-surface)] text-[13px] rounded px-3 py-2 outline-none focus:border-[var(--color-primary)]"
-                  placeholder="Enter business name"
-                />
-                {nameError && <p className="text-[var(--color-error)] text-xs mt-1">{nameError}</p>}
-              </div>
-            </div>
-          </div>
-        </section>
- 
         {/* Ledger Names */}
         <section className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-lg p-6">
           <div className="flex items-center gap-2 mb-6 border-b border-[var(--color-outline)] pb-2">
@@ -334,112 +303,27 @@ export function Settings({
           </div>
         </section>
 
-        {/* Desktop & Network Synchronization */}
-        {localIp && (
+        {/* System Preferences */}
+        {onToggleAutoStart && (
           <section className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-lg p-6">
             <div className="flex items-center gap-2 mb-6 border-b border-[var(--color-outline)] pb-2">
               <Globe className="text-[var(--color-primary)]" size={20} />
-              <h3 className="text-[11px] font-bold tracking-wider text-[var(--color-on-surface)] uppercase">Desktop & Network Sync</h3>
+              <h3 className="text-[11px] font-bold tracking-wider text-[var(--color-on-surface)] uppercase">System Preferences</h3>
             </div>
             <div className="space-y-6">
               {/* Auto Start Toggle */}
-              {onToggleAutoStart && (
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h4 className="font-semibold text-base text-[var(--color-on-surface)]">Auto-Start on Boot</h4>
-                    <p className="text-[13px] text-[var(--color-on-surface-variant)] mt-1">Start Bujet Secure automatically when Windows logs in.</p>
-                  </div>
-                  <div className="pt-1">
-                    <button
-                      onClick={() => onToggleAutoStart(!autoStart)}
-                      className={`w-10 h-5 rounded-full relative transition-colors ${autoStart ? "bg-[var(--color-primary)]" : "bg-[var(--color-outline)]"}`}
-                    >
-                      <div className={`absolute top-0.5 bottom-0.5 w-4 bg-white rounded-full transition-all ${autoStart ? "left-[22px]" : "left-[2px]"}`}></div>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {onToggleAutoStart && <div className="h-px bg-[var(--color-outline)]/50 w-full"></div>}
-
-              {/* Sync URL Display */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h4 className="font-semibold text-base text-[var(--color-on-surface)]">Mobile Sync URL</h4>
-                  <p className="text-[13px] text-[var(--color-on-surface-variant)] font-medium">Use this URL in your mobile app to synchronize ledgers.</p>
+                  <h4 className="font-semibold text-base text-[var(--color-on-surface)]">Auto-Start on Boot</h4>
+                  <p className="text-[13px] text-[var(--color-on-surface-variant)] mt-1">Start Budget Secure automatically when Windows logs in.</p>
                 </div>
-                <div className="w-full sm:w-80 flex gap-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value={`http://${localIp}:3001/api/sync`}
-                    className="w-full bg-[var(--color-background)] border border-[var(--color-outline)] text-[var(--color-on-surface)] font-mono text-[12px] rounded px-3 py-1.5 outline-none"
-                  />
+                <div className="pt-1">
                   <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(`http://${localIp}:3001/api/sync`);
-                      setCopiedUrl(true);
-                      setTimeout(() => setCopiedUrl(false), 2000);
-                    }}
-                    className="px-3 bg-[var(--color-surface)] border border-[var(--color-outline)] text-[var(--color-on-surface)] hover:bg-[var(--color-outline)] rounded transition-colors"
+                    onClick={() => onToggleAutoStart(!autoStart)}
+                    className={`w-10 h-5 rounded-full relative transition-colors ${autoStart ? "bg-[var(--color-primary)]" : "bg-[var(--color-outline)]"}`}
                   >
-                    {copiedUrl ? <Check size={16} className="text-[var(--color-secondary)]" /> : <Copy size={16} />}
+                    <div className={`absolute top-0.5 bottom-0.5 w-4 bg-white rounded-full transition-all ${autoStart ? "left-[22px]" : "left-[2px]"}`}></div>
                   </button>
-                </div>
-              </div>
-
-              <div className="h-px bg-[var(--color-outline)]/50 w-full"></div>
-
-              {/* Shared Secret Token */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h4 className="font-semibold text-base text-[var(--color-on-surface)]">Sync Access Token</h4>
-                  <p className="text-[13px] text-[var(--color-on-surface-variant)]">Authorization token required for mobile data exchange.</p>
-                </div>
-                <div className="w-full sm:w-80 flex gap-2">
-                  <input
-                    type={showToken ? "text" : "password"}
-                    readOnly
-                    value={authToken}
-                    className="w-full bg-[var(--color-background)] border border-[var(--color-outline)] text-[var(--color-on-surface)] font-mono text-[12px] tracking-wider rounded px-3 py-1.5 outline-none"
-                  />
-                  <button
-                    onClick={() => setShowToken(!showToken)}
-                    className="px-3 bg-[var(--color-surface)] border border-[var(--color-outline)] text-[var(--color-on-surface)] hover:bg-[var(--color-outline)] rounded transition-colors"
-                  >
-                    {showToken ? <EyeOff size={16} /> : <Eye size={16} />}
-                  </button>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(authToken || "");
-                      setCopiedToken(true);
-                      setTimeout(() => setCopiedToken(false), 2000);
-                    }}
-                    className="px-3 bg-[var(--color-surface)] border border-[var(--color-outline)] text-[var(--color-on-surface)] hover:bg-[var(--color-outline)] rounded transition-colors"
-                  >
-                    {copiedToken ? <Check size={16} className="text-[var(--color-secondary)]" /> : <Copy size={16} />}
-                  </button>
-                </div>
-              </div>
-
-              <div className="h-px bg-[var(--color-outline)]/50 w-full"></div>
-
-              {/* QR Code Auto-Configuration */}
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
-                <div>
-                  <h4 className="font-semibold text-base text-[var(--color-on-surface)]">Mobile Sync QR Code</h4>
-                  <p className="text-[13px] text-[var(--color-on-surface-variant)] mt-1 max-w-sm">
-                    Scan this QR code from the mobile Settings screen to instantly configure connection details (IP address and secret token).
-                  </p>
-                </div>
-                <div className="flex flex-col items-center justify-center p-3 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded-lg">
-                  {qrCodeUrl ? (
-                    <img src={qrCodeUrl} alt="Sync QR Code" className="w-36 h-36 rounded" />
-                  ) : (
-                    <div className="w-36 h-36 flex items-center justify-center text-xs text-[var(--color-on-surface-variant)] font-mono animate-pulse">
-                      Generating QR...
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
@@ -515,7 +399,7 @@ export function Settings({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <h4 className="font-semibold text-base text-[var(--color-on-surface)]">Application Version</h4>
-                <p className="text-[13px] text-[var(--color-on-surface-variant)]">The currently installed version of Bujet Secure.</p>
+                <p className="text-[13px] text-[var(--color-on-surface-variant)]">The currently installed version of Budget Secure.</p>
               </div>
               <div className="w-full sm:w-64 font-semibold text-sm text-[var(--color-on-surface)]">
                 {appVersion}

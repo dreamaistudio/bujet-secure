@@ -1,5 +1,6 @@
 import { 
   Building2, 
+  CalendarCheck,
   CircleHelp,
   HandCoins,
   LayoutDashboard, 
@@ -28,6 +29,7 @@ export function Sidebar({ currentView, onNavigate, businessName, isOpen, onClose
     { id: 'personal', label: 'Personal', icon: User },
     { id: 'loans', label: 'Loans', icon: HandCoins },
     { id: 'savings', label: 'Savings', icon: PiggyBank },
+    { id: 'bills', label: 'Bills', icon: CalendarCheck },
     { id: 'settings', label: 'Settings', icon: Settings },
   ];
 
@@ -43,35 +45,40 @@ export function Sidebar({ currentView, onNavigate, businessName, isOpen, onClose
       
       <nav 
         className={cn(
-          "fixed inset-y-0 left-0 z-50 w-[240px] shrink-0 h-screen flex flex-col bg-[var(--color-surface)] border-r border-[var(--color-outline)] transition-transform duration-300 md:relative md:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 w-[280px] md:w-[240px] shrink-0 h-screen flex flex-col bg-[var(--color-surface)] border-r border-[var(--color-outline)] transition-transform duration-300 md:relative md:translate-x-0 shadow-2xl md:shadow-none",
           isOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
-      <div className="p-6 border-b border-[var(--color-outline)] text-left">
-        <h1 className="font-bold text-lg text-[var(--color-on-surface)] uppercase tracking-wider">
-          {businessName}
-        </h1>
-        <p className="text-xs text-[var(--color-on-surface-variant)] mt-1 font-medium">LKR Portfolio</p>
+      <div className="p-6 border-b border-[var(--color-outline)] text-left flex items-center justify-between">
+        <div>
+          <h1 className="font-bold text-lg text-[var(--color-on-surface)] uppercase tracking-wider">
+            {businessName}
+          </h1>
+          <p className="text-xs text-[var(--color-on-surface-variant)] mt-1 font-medium">LKR Portfolio</p>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-4">
-        <ul className="space-y-1">
+      <div className="flex-1 overflow-y-auto py-3">
+        <ul className="space-y-1 px-2">
           {navItems.map((item) => {
             const isActive = currentView === item.id;
             const Icon = item.icon;
             return (
               <li key={item.id}>
                 <button
-                  onClick={() => onNavigate(item.id)}
+                  onClick={() => {
+                    onNavigate(item.id);
+                    onClose();
+                  }}
                   className={cn(
-                    "w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors",
+                    "w-full flex items-center gap-3.5 px-4 py-3 min-h-[46px] rounded text-sm font-medium transition-colors cursor-pointer text-left",
                     isActive 
-                      ? "text-[var(--color-secondary)] bg-[var(--color-surface-variant)] border-l-2 border-[var(--color-secondary)]" 
-                      : "text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)] hover:text-[var(--color-on-surface)] border-l-2 border-transparent"
+                      ? "text-[var(--color-secondary)] bg-[var(--color-surface-variant)] border-l-3 border-[var(--color-secondary)] font-semibold" 
+                      : "text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)] hover:text-[var(--color-on-surface)] border-l-3 border-transparent"
                   )}
                 >
                   <Icon size={20} className={isActive ? "text-[var(--color-secondary)]" : ""} />
-                  {item.label}
+                  <span className="truncate">{item.label}</span>
                 </button>
               </li>
             );
@@ -79,24 +86,30 @@ export function Sidebar({ currentView, onNavigate, businessName, isOpen, onClose
         </ul>
       </div>
 
-      <div className="mt-auto border-t border-[var(--color-outline)] py-4">
+      <div className="mt-auto border-t border-[var(--color-outline)] py-3 px-2">
         <ul className="space-y-1">
           <li>
             <button 
-              onClick={onSupportClick}
-              className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)] hover:text-[var(--color-on-surface)] transition-colors"
+              onClick={() => {
+                onSupportClick();
+                onClose();
+              }}
+              className="w-full flex items-center gap-3.5 px-4 py-3 min-h-[46px] rounded text-sm font-medium text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)] hover:text-[var(--color-on-surface)] transition-colors cursor-pointer text-left"
             >
               <CircleHelp size={20} />
-              Support
+              <span>Support</span>
             </button>
           </li>
           <li>
             <button 
-              onClick={() => onNavigate('lock')}
-              className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)] hover:text-[var(--color-on-surface)] transition-colors"
+              onClick={() => {
+                onNavigate('lock');
+                onClose();
+              }}
+              className="w-full flex items-center gap-3.5 px-4 py-3 min-h-[46px] rounded text-sm font-medium text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)] hover:text-[var(--color-on-surface)] transition-colors cursor-pointer text-left"
             >
               <LogOut size={20} />
-              Sign Out
+              <span>Sign Out</span>
             </button>
           </li>
         </ul>

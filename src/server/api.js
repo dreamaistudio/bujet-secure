@@ -201,29 +201,133 @@ router.delete('/savings/:id', (req, res) => {
   }
 });
 
-// GET /api/sync - returns full database snapshot for mobile initial dump
-router.get('/sync', (req, res) => {
+// GET /api/keepers
+router.get('/keepers', (req, res) => {
   try {
-    const txs = db.getAllTransactionsRaw();
-    const settings = db.getSettings();
-    const loans = db.getLoans();
-    let savings = [];
-    try { savings = db.getSavings(); } catch (e) { /* table may not exist yet */ }
-    res.json({ transactions: txs, settings, loans, savings });
+    const keepers = db.getKeepers();
+    res.json(keepers);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// POST /api/keepers
+router.post('/keepers', (req, res) => {
+  try {
+    const keeper = req.body;
+    if (!keeper.id || !keeper.name || !keeper.type) {
+      return res.status(400).json({ error: 'Bad Request: Incomplete keeper object structure' });
+    }
+    const saved = db.saveKeeper(keeper);
+    res.json(saved);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/keepers/:id
+router.put('/keepers/:id', (req, res) => {
+  try {
+    const { name, type } = req.body;
+    const keeperId = req.params.id;
+    if (!name || !type) {
+      return res.status(400).json({ error: 'Bad Request: Missing name or type' });
+    }
+    const saved = db.saveKeeper({ id: keeperId, name, type });
+    res.json(saved);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/keepers/:id
+router.delete('/keepers/:id', (req, res) => {
+  try {
+    const keeperId = req.params.id;
+    if (db.isKeeperReferenced(keeperId)) {
+      return res.status(400).json({ error: 'This keeper is used by existing savings entries' });
+    }
+    db.deleteKeeper(keeperId);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// GET /api/bills
+router.get('/bills', (req, res) => {
+  try {
+    const bills = db.getBills();
+    res.json(bills);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/bills
+router.post('/bills', (req, res) => {
+  try {
+    const bill = req.body;
+    if (!bill.id || !bill.name || bill.amount === undefined || bill.dueDay === undefined) {
+      return res.status(400).json({ error: 'Bad Request: Incomplete bill object structure' });
+    }
+    const saved = db.saveBill(bill);
+    res.json(saved);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/bills/:id
+router.delete('/bills/:id', (req, res) => {
+  try {
+    db.deleteBill(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/bill-payments
+router.get('/bill-payments', (req, res) => {
+  try {
+    const payments = db.getBillPayments();
+    res.json(payments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/bill-payments
+router.post('/bill-payments', (req, res) => {
+  try {
+    const payment = req.body;
+    if (!payment.id || !payment.bill_id || !payment.month) {
+      return res.status(400).json({ error: 'Bad Request: Incomplete bill payment object structure' });
+    }
+    const saved = db.saveBillPayment(payment);
+    res.json(saved);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/bill-payments/:id
+router.delete('/bill-payments/:id', (req, res) => {
+  try {
+    db.deleteBillPayment(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // POST /api/sync - receives mobile changes, merges with Last-Write-Wins and returns merged state
 router.post('/sync', authMiddleware, (req, res) => {
   try {
-    const { transactions, settings, loans, savings } = req.body;
-
-    // Merge transactions if provided
-    if (transactions && Array.isArray(transactions)) {
-      db.syncTransactions(transactions);
-    }
+    const { transactions, settings, loans, keepers, savings, bills, billPayments } = req.body;
 
     // Merge settings if provided
     if (settings && typeof settings === 'object') {
@@ -239,9 +343,19 @@ router.post('/sync', authMiddleware, (req, res) => {
       db.saveSettings(mergedSettings);
     }
 
+    // Merge transactions if provided
+    if (transactions && Array.isArray(transactions)) {
+      db.syncTransactions(transactions);
+    }
+
     // Merge loans if provided
     if (loans && Array.isArray(loans)) {
       db.syncLoans(loans);
+    }
+
+    // Merge keepers if provided (MUST merge keepers BEFORE savings entries)
+    if (keepers && Array.isArray(keepers)) {
+      db.syncKeepers(keepers);
     }
 
     // Merge savings if provided
@@ -249,36 +363,39 @@ router.post('/sync', authMiddleware, (req, res) => {
       db.syncSavings(savings);
     }
 
+    // Merge bills BEFORE bill_payments (bill_payments.bill_id references bills.id)
+    if (bills && Array.isArray(bills)) {
+      db.syncBills(bills);
+    }
+
+    // Merge bill payments if provided
+    if (billPayments && Array.isArray(billPayments)) {
+      db.syncBillPayments(billPayments);
+    }
+
     // Retrieve and respond with the fully merged unified database state
     const unifiedTxs = db.getAllTransactionsRaw();
     const unifiedSettings = db.getSettings();
     const unifiedLoans = db.getAllLoansRaw();
+    const unifiedKeepers = db.getKeepers();
     const unifiedSavings = db.getAllSavingsRaw();
+    const unifiedBills = db.getAllBillsRaw();
+    const unifiedBillPayments = db.getAllBillPaymentsRaw();
 
     res.json({
       transactions: unifiedTxs.filter(t => !t.deleted),
       settings: unifiedSettings,
       loans: unifiedLoans.filter(l => !l.deleted),
-      savings: unifiedSavings.filter(s => !s.deleted)
+      keepers: unifiedKeepers,
+      savings: unifiedSavings.filter(s => !s.deleted),
+      bills: unifiedBills.filter(b => !b.deleted),
+      billPayments: unifiedBillPayments.filter(bp => !bp.deleted)
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/ping - lightweight connection check (unauthenticated)
-router.get('/ping', (req, res) => {
-  try {
-    const settings = db.getSettings() || {};
-    res.json({
-      status: 'ok',
-      ip: getLocalIpAddress(),
-      name: settings.businessName || 'Bujet Secure'
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // GET /api/system-info - exposes system details for client connection settings
 router.get('/system-info', (req, res) => {

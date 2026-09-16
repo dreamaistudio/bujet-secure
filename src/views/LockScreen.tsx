@@ -310,7 +310,7 @@ export function LockScreen({ onUnlock, authPin, biometricEnabled }: LockScreenPr
 
         {/* Footer */}
         <div className="px-6 py-3 bg-[var(--color-surface)] border-t border-[var(--color-outline)] flex justify-between items-center font-mono text-[11px] text-[var(--color-on-surface-variant)]">
-          <span>TERMINAL_ID: VLP-WS-092</span>
+          <span>BUDGET SECURE v1.0</span>
           <span className="flex items-center gap-1">
             <span className={cn("w-1.5 h-1.5 rounded-full", isLockedOut ? "bg-[var(--color-error)]" : "bg-[var(--color-secondary)]")}></span>
             {isLockedOut ? "LOCKED" : "SECURE CONNECTION"}

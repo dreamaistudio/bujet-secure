@@ -10,13 +10,14 @@ import { Settings } from "./views/Settings";
 import { Transactions } from "./views/Transactions";
 import { Loans } from "./views/Loans";
 import { Savings } from "./views/Savings";
-import { Transaction, LoanEntry, SavingsEntry } from "./types";
-import { initialTransactions, STORAGE_KEYS } from "./data";
+import { Bills } from "./views/Bills";
+import { Transaction, LoanEntry, SavingsEntry, Keeper, Bill, BillPayment } from "./types";
+import { STORAGE_KEYS } from "./data";
 import { SplashScreen } from "./components/SplashScreen";
 import { generateId, getTodayString } from "./lib/utils";
+import { UpdateNotification } from "./components/UpdateNotification";
 
 interface AppSettings {
-  businessName: string;
   authPin: string;
   biometricEnabled: boolean;
   currency: string;
@@ -26,7 +27,6 @@ interface AppSettings {
 }
 
 const defaultSettings: AppSettings = {
-  businessName: "Bujet Secure",
   authPin: "",
   biometricEnabled: false,
   currency: "LKR",
@@ -48,7 +48,7 @@ function loadSettings(): AppSettings {
 function loadTransactions(): Transaction[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.transactions);
-    if (raw) return JSON.parse(raw);
+    if (raw !== null) return JSON.parse(raw);
   } catch {
     // ignore
   }
@@ -75,6 +75,36 @@ function loadSavings(): SavingsEntry[] {
   return [];
 }
 
+function loadKeepers(): Keeper[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.keepers);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+function loadBills(): Bill[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.bills);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+function loadBillPayments(): BillPayment[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.billPayments);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
 export default function App() {
   const [showSplash, setShowSplash] = useState(() => {
     return !sessionStorage.getItem("splash_shown");
@@ -90,6 +120,9 @@ export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>(loadTransactions);
   const [loans, setLoans] = useState<LoanEntry[]>(loadLoans);
   const [savings, setSavings] = useState<SavingsEntry[]>(loadSavings);
+  const [keepers, setKeepers] = useState<Keeper[]>(loadKeepers);
+  const [bills, setBills] = useState<Bill[]>(loadBills);
+  const [billPayments, setBillPayments] = useState<BillPayment[]>(loadBillPayments);
 
   // Desktop App states
   const [isApiAvailable, setIsApiAvailable] = useState(false);
@@ -108,8 +141,16 @@ export default function App() {
   const undoTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Sync state with local SQLite Express API if available
+  // Sync state with local SQLite Express API if available (Electron Desktop only)
   const checkApi = useCallback(async () => {
+    // Android / Standalone Mode: Zero fetch attempts to localhost:3001
+    const isElectron = typeof window !== 'undefined' && Boolean((window as any).electronAPI);
+    if (!isElectron) {
+      setIsApiAvailable(false);
+      setSyncStatus("Local Only");
+      return;
+    }
+
     try {
       setSyncStatus("Syncing");
       const res = await fetch("http://localhost:3001/api/system-info");
@@ -131,6 +172,9 @@ export default function App() {
         const localSettings = loadSettings();
         const localLoans = loadLoans();
         const localSavings = loadSavings();
+        const localKeepers = loadKeepers();
+        const localBills = loadBills();
+        const localBillPayments = loadBillPayments();
 
         // Perform bidirectional sync with the server database
         const syncResponse = await fetch("http://localhost:3001/api/sync", {
@@ -143,7 +187,10 @@ export default function App() {
             transactions: localTxs,
             settings: localSettings,
             loans: localLoans,
-            savings: localSavings
+            keepers: localKeepers,
+            savings: localSavings,
+            bills: localBills,
+            billPayments: localBillPayments
           })
         });
 
@@ -158,8 +205,17 @@ export default function App() {
           if (Array.isArray(merged.loans)) {
             setLoans(merged.loans);
           }
+          if (Array.isArray(merged.keepers)) {
+            setKeepers(merged.keepers);
+          }
           if (Array.isArray(merged.savings)) {
             setSavings(merged.savings);
+          }
+          if (Array.isArray(merged.bills)) {
+            setBills(merged.bills);
+          }
+          if (Array.isArray(merged.billPayments)) {
+            setBillPayments(merged.billPayments);
           }
           setSyncStatus("Synced");
         } else {
@@ -199,6 +255,21 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.savings, JSON.stringify(savings));
   }, [savings]);
+
+  // Persist keepers
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.keepers, JSON.stringify(keepers));
+  }, [keepers]);
+
+  // Persist bills
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(bills));
+  }, [bills]);
+
+  // Persist bill payments
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.billPayments, JSON.stringify(billPayments));
+  }, [billPayments]);
 
   // Inactivity auto-lock timer
   useEffect(() => {
@@ -414,7 +485,19 @@ export default function App() {
       });
       setSavings(convertedSavings);
 
-      // Batch update converted transactions, loans, and savings
+      // Convert bills
+      const convertedBills = bills.map((bill) => {
+        let newAmount = bill.amount;
+        if (settings.currency === "LKR" && newSettings.currency === "USD") {
+          newAmount = Number((bill.amount / rate).toFixed(2));
+        } else if (settings.currency === "USD" && newSettings.currency === "LKR") {
+          newAmount = Number((bill.amount * rate).toFixed(2));
+        }
+        return { ...bill, amount: newAmount, updated_at: now };
+      });
+      setBills(convertedBills);
+
+      // Batch update converted transactions, loans, savings, and bills
       if (isApiAvailable) {
         try {
           for (const tx of finalTransactions) {
@@ -436,6 +519,13 @@ export default function App() {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(saving)
+            });
+          }
+          for (const bill of convertedBills) {
+            await fetch("http://localhost:3001/api/bills", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(bill)
             });
           }
         } catch (err) {
@@ -499,6 +589,8 @@ export default function App() {
     localStorage.removeItem(STORAGE_KEYS.lockout);
     localStorage.removeItem(STORAGE_KEYS.loans);
     localStorage.removeItem(STORAGE_KEYS.savings);
+    localStorage.removeItem(STORAGE_KEYS.bills);
+    localStorage.removeItem(STORAGE_KEYS.billPayments);
     localStorage.removeItem("finance_vault_last_active");
 
     // Step 3: Reset React state to defaults
@@ -506,6 +598,8 @@ export default function App() {
     setSettings(defaultSettings);
     setLoans([]);
     setSavings([]);
+    setBills([]);
+    setBillPayments([]);
     setCurrentView("dashboard");
 
     // Step 4: Show a "Data Cleared" toast overlay for 2 seconds, then lock
@@ -685,6 +779,65 @@ export default function App() {
     }
   }, [savings, isApiAvailable]);
 
+  // --- Keepers CRUD handlers ---
+
+  const handleAddKeeper = useCallback(async (keeper: Keeper) => {
+    setKeepers((prev) => [keeper, ...prev]);
+
+    if (isApiAvailable) {
+      try {
+        await fetch("http://localhost:3001/api/keepers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(keeper)
+        });
+      } catch (err) {
+        console.error("Failed to POST keeper:", err);
+      }
+    }
+  }, [isApiAvailable]);
+
+  const handleEditKeeper = useCallback(async (id: string, name: string, type: 'bank' | 'wallet' | 'person') => {
+    setKeepers((prev) => prev.map((k) => k.id === id ? { ...k, name, type } : k));
+
+    if (isApiAvailable) {
+      try {
+        await fetch(`http://localhost:3001/api/keepers/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, type })
+        });
+      } catch (err) {
+        console.error("Failed to PUT keeper:", err);
+      }
+    }
+  }, [isApiAvailable]);
+
+  const handleDeleteKeeper = useCallback(async (id: string) => {
+    // Check if keeper is referenced in client savings
+    const isReferenced = savings.some(s => s.keeper_id === id && s.status === 'kept');
+    if (isReferenced) {
+      throw new Error("This keeper is used by existing savings entries");
+    }
+
+    if (isApiAvailable) {
+      try {
+        const res = await fetch(`http://localhost:3001/api/keepers/${id}`, {
+          method: "DELETE"
+        });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || "Failed to delete keeper");
+        }
+      } catch (err: any) {
+        console.error("Failed to DELETE keeper:", err);
+        throw err;
+      }
+    }
+    // Update local state if API succeeded (or if local-only)
+    setKeepers((prev) => prev.filter((k) => k.id !== id));
+  }, [savings, isApiAvailable]);
+
   const handleEditTransaction = useCallback(async (updatedTx: Transaction) => {
     const now = Date.now();
     const finalTx = { ...updatedTx, updated_at: now };
@@ -707,6 +860,144 @@ export default function App() {
 
   const openAddModal = useCallback(() => setShowAddModal(true), []);
   
+  // --- Bills CRUD handlers ---
+
+  const handleAddBill = useCallback(async (bill: Bill) => {
+    const now = Date.now();
+    const newBill = { ...bill, updated_at: now };
+    setBills((prev) => [newBill, ...prev]);
+
+    if (isApiAvailable) {
+      try {
+        await fetch("http://localhost:3001/api/bills", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(newBill)
+        });
+      } catch (err) {
+        console.error("Failed to POST bill:", err);
+      }
+    }
+  }, [isApiAvailable]);
+
+  const handleDeleteBill = useCallback(async (id: string) => {
+    setBills((prev) => prev.filter((b) => b.id !== id));
+
+    if (isApiAvailable) {
+      try {
+        await fetch(`http://localhost:3001/api/bills/${id}`, {
+          method: "DELETE"
+        });
+      } catch (err) {
+        console.error("Failed to DELETE bill:", err);
+      }
+    }
+  }, [isApiAvailable]);
+
+  const handleMarkBillPaid = useCallback(async (billId: string, addAsTransaction: boolean) => {
+    const bill = bills.find(b => b.id === billId);
+    if (!bill) return;
+
+    const now = Date.now();
+    const today = getTodayString();
+    const currentMonth = today.substring(0, 7); // 'YYYY-MM'
+
+    // Duplicate check: if an active payment already exists for this bill+month, update it
+    const existingPayment = billPayments.find(
+      bp => bp.bill_id === billId && bp.month === currentMonth && !bp.deleted
+    );
+
+    let linkedTxId: string | undefined;
+
+    if (addAsTransaction) {
+      const txId = generateId();
+      linkedTxId = txId;
+      const tx: Transaction = {
+        id: txId,
+        date: today,
+        description: `Bill payment: ${bill.name}`,
+        category: bill.category,
+        amount: -Math.abs(bill.amount),
+        status: 'CLEARED',
+        updated_at: now,
+      };
+      setTransactions(prev => [tx, ...prev]);
+      if (isApiAvailable) {
+        try {
+          await fetch("http://localhost:3001/api/transactions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(tx)
+          });
+        } catch (err) {
+          console.error("Failed to POST bill payment transaction:", err);
+        }
+      }
+    }
+
+    if (existingPayment) {
+      // UPDATE existing record (prevents double-click duplicates)
+      const updated: BillPayment = {
+        ...existingPayment,
+        paid: 1,
+        paid_date: today,
+        linked_transaction_id: linkedTxId ?? existingPayment.linked_transaction_id,
+        updated_at: now,
+      };
+      setBillPayments(prev =>
+        prev.map(bp => bp.id === existingPayment.id ? updated : bp)
+      );
+      if (isApiAvailable) {
+        try {
+          await fetch("http://localhost:3001/api/bill-payments", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updated)
+          });
+        } catch (err) {
+          console.error("Failed to update existing bill payment:", err);
+        }
+      }
+    } else {
+      // INSERT new record
+      const payment: BillPayment = {
+        id: generateId(),
+        bill_id: billId,
+        month: currentMonth,
+        paid: 1,
+        paid_date: today,
+        linked_transaction_id: linkedTxId,
+        updated_at: now,
+      };
+      setBillPayments(prev => [payment, ...prev]);
+      if (isApiAvailable) {
+        try {
+          await fetch("http://localhost:3001/api/bill-payments", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payment)
+          });
+        } catch (err) {
+          console.error("Failed to POST bill payment:", err);
+        }
+      }
+    }
+  }, [bills, billPayments, isApiAvailable]);
+
+  const handleUnpayBill = useCallback(async (paymentId: string) => {
+    setBillPayments((prev) => prev.filter((bp) => bp.id !== paymentId));
+
+    if (isApiAvailable) {
+      try {
+        await fetch(`http://localhost:3001/api/bill-payments/${paymentId}`, {
+          method: "DELETE"
+        });
+      } catch (err) {
+        console.error("Failed to DELETE bill payment:", err);
+      }
+    }
+  }, [isApiAvailable]);
+
   const openEditModal = useCallback((tx: Transaction) => {
     setEditingTransaction(tx);
     setShowAddModal(true);
@@ -742,6 +1033,7 @@ export default function App() {
             businessLedgerName={settings.businessLedgerName}
             personalLedgerName={settings.personalLedgerName}
             onEditClick={openEditModal}
+            onAddTransactionClick={openAddModal}
           />
         );
       case "business":
@@ -792,16 +1084,31 @@ export default function App() {
         return (
           <Savings
             savings={savings}
+            keepers={keepers}
             currency={settings.currency}
             onAddSaving={handleAddSaving}
             onDeleteSaving={handleDeleteSaving}
             onWithdraw={handleWithdrawSaving}
+            onAddKeeper={handleAddKeeper}
+            onEditKeeper={handleEditKeeper}
+            onDeleteKeeper={handleDeleteKeeper}
+          />
+        );
+      case "bills":
+        return (
+          <Bills
+            bills={bills}
+            billPayments={billPayments}
+            currency={settings.currency}
+            onAddBill={handleAddBill}
+            onDeleteBill={handleDeleteBill}
+            onMarkPaid={handleMarkBillPaid}
+            onUnpay={handleUnpayBill}
           />
         );
       case "settings":
         return (
           <Settings
-            businessName={settings.businessName}
             authPin={settings.authPin}
             biometricEnabled={settings.biometricEnabled}
             currency={settings.currency}
@@ -810,8 +1117,6 @@ export default function App() {
             personalLedgerName={settings.personalLedgerName}
             onSave={handleSaveSettings}
             onStartFresh={handleStartFresh}
-            localIp={localIp}
-            authToken={authToken}
             autoStart={autoStart}
             onToggleAutoStart={handleToggleAutoStart}
           />
@@ -855,7 +1160,7 @@ export default function App() {
   const getTitle = () => {
     switch (currentView) {
       case "dashboard":
-        return settings.businessName;
+        return "Budget Secure";
       case "transactions":
         return "Transaction Management";
       case "business":
@@ -866,10 +1171,12 @@ export default function App() {
         return "Loans";
       case "savings":
         return "Savings";
+      case "bills":
+        return "Bills";
       case "settings":
         return "Settings";
       default:
-        return settings.businessName;
+        return "Budget Secure";
     }
   };
 
@@ -878,7 +1185,7 @@ export default function App() {
       <Sidebar
         currentView={currentView}
         onNavigate={handleNavigate}
-        businessName={settings.businessName}
+        businessName="Budget Secure"
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         onSupportClick={() => {
@@ -891,8 +1198,6 @@ export default function App() {
         <TopBar
           title={getTitle()}
           onLock={() => setIsLocked(true)}
-          showAddTransaction={currentView === "transactions" || currentView === "dashboard"}
-          onAddTransactionClick={openAddModal}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
           syncStatus={syncStatus}
         />
@@ -979,6 +1284,8 @@ export default function App() {
           </button>
         </div>
       )}
+
+      <UpdateNotification />
     </div>
   );
 }

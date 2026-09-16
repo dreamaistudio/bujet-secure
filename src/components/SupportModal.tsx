@@ -17,12 +17,12 @@ const faqs: FAQItem[] = [
     a: "Your data is stored completely locally in a secure SQLite database (with local JSON fallback) on your machine. We do not upload your financial data to external servers, giving you 100% control and ownership over your ledger."
   },
   {
-    q: "How does local network synchronization work?",
-    a: "By launching the local Express sync server on your PC, other devices (such as a mobile app) on the same local Wi-Fi network can connect to the sync endpoint. Syncing uses a 'Last-Write-Wins' mechanism which evaluates timestamps on transaction edits to ensure both devices align correctly."
+    q: "How does database synchronization work?",
+    a: "On startup, the app synchronizes its session cache with the local SQLite database. Synchronization uses a 'Last-Write-Wins' mechanism evaluating timestamps on edits to ensure that both layers align correctly."
   },
   {
     q: "Can I undo or restore deleted transactions?",
-    a: "Yes! Whenever you delete a transaction from the list, an 'Undo' option will pop up at the bottom of the screen. You have 5 seconds to click it and restore the deleted item. Under the hood, the transaction is soft-deleted, allowing it to sync with other devices before being permanently removed from view."
+    a: "Yes! Whenever you delete a transaction from the list, an 'Undo' option will pop up at the bottom of the screen. You have 5 seconds to click it and restore the deleted item. Under the hood, the transaction is soft-deleted, allowing it to sync with the database server before being permanently removed."
   },
   {
     q: "How do I secure the app with a PIN?",
