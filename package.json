@@ -2,7 +2,7 @@
   "name": "budget-secure",
   "productName": "Budget Secure",
   "private": true,
-  "version": "1.0.9",
+  "version": "1.0.10",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {

@@ -124,9 +124,9 @@ function startExpressServer() {
     });
   }
 
-  // Listen on port 3001 on all local network adapters
-  server = expressApp.listen(3001, '0.0.0.0', () => {
-    console.log('Express sync server running on http://0.0.0.0:3001');
+  // Listen on port 3001 on local loopback interface only
+  server = expressApp.listen(3001, '127.0.0.1', () => {
+    console.log('Express sync server running on http://127.0.0.1:3001');
   }).on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.log('Port 3001 already in use, assuming server already running');
@@ -147,7 +147,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      devTools: true,
+      devTools: !app.isPackaged,
     },
     icon: path.join(__dirname, 'assets', 'icon.png')
   });
@@ -158,6 +158,10 @@ function createWindow() {
   } else {
     mainWindow.loadURL('http://localhost:3000');
   }
+
+  mainWindow.webContents.on('console-message', (event, level, message) => {
+    console.log(`[Renderer] ${message}`);
+  });
 
   mainWindow.on('close', (event) => {
     if (!app.isQuitting) {

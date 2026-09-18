@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Download, RotateCcw, X, AlertCircle, Settings as SettingsIcon } from "lucide-react";
-import { getAppPlatform, NativeAppUpdate } from "../lib/appUpdater";
+import { getAppPlatform, NativeAppUpdate, getDistributionFlavor } from "../lib/appUpdater";
 
 export interface AppUpdateEventData {
   status: 'available' | 'downloading' | 'downloaded' | 'failed' | 'permission_required';
@@ -23,9 +23,44 @@ export function UpdateNotification() {
   const [downloadUrl, setDownloadUrl] = useState<string>('');
   const [progress, setProgress] = useState<number>(0);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [isStoreBuild, setIsStoreBuild] = useState<boolean>(false);
 
   useEffect(() => {
-    // 1. Listen for custom in-app update events (from Android or manual triggers)
+    let unmounted = false;
+    let removeListener: (() => void) | null = null;
+
+    getDistributionFlavor().then((flavor) => {
+      if (unmounted) return;
+      if (flavor === 'store') {
+        setIsStoreBuild(true);
+        return;
+      }
+
+      // Listen for Android native download progress only on direct builds
+      if (getAppPlatform() === 'android') {
+        NativeAppUpdate.addListener('downloadProgress', (data) => {
+          if (data.status === 'downloading') {
+            setStatus('downloading');
+            setProgress(typeof data.progress === 'number' ? data.progress : 0);
+            setShow(true);
+          } else if (data.status === 'downloaded') {
+            setStatus('downloaded');
+            setProgress(100);
+            setShow(true);
+          } else if (data.status === 'failed') {
+            setStatus('failed');
+            setErrorMessage(data.error || 'Download failed');
+            setShow(true);
+          }
+        }).then((handle) => {
+          removeListener = () => handle.remove();
+        }).catch((err) => {
+          console.warn('Could not register Android update listener:', err);
+        });
+      }
+    });
+
+    // 1. Listen for custom in-app update events (from direct builds or manual triggers)
     const handleCustomEvent = (e: Event) => {
       const detail = (e as CustomEvent<AppUpdateEventData>).detail;
       if (!detail) return;
@@ -65,30 +100,6 @@ export function UpdateNotification() {
       });
     }
 
-    // 3. Listen for Android native download progress
-    let removeListener: (() => void) | null = null;
-    if (getAppPlatform() === 'android') {
-      NativeAppUpdate.addListener('downloadProgress', (data) => {
-        if (data.status === 'downloading') {
-          setStatus('downloading');
-          setProgress(typeof data.progress === 'number' ? data.progress : 0);
-          setShow(true);
-        } else if (data.status === 'downloaded') {
-          setStatus('downloaded');
-          setProgress(100);
-          setShow(true);
-        } else if (data.status === 'failed') {
-          setStatus('failed');
-          setErrorMessage(data.error || 'Download failed');
-          setShow(true);
-        }
-      }).then((handle) => {
-        removeListener = () => handle.remove();
-      }).catch((err) => {
-        console.warn('Could not register Android update listener:', err);
-      });
-    }
-
     // Developer mock test helper
     (window as any).__triggerMockUpdate = (mockStatus: any, mockVersion: string) => {
       setStatus(mockStatus);
@@ -98,6 +109,7 @@ export function UpdateNotification() {
     };
 
     return () => {
+      unmounted = true;
       window.removeEventListener('app-update-event', handleCustomEvent);
       if (removeListener) removeListener();
       delete (window as any).__triggerMockUpdate;
@@ -162,7 +174,7 @@ export function UpdateNotification() {
     }
   };
 
-  if (!show || !status) return null;
+  if (isStoreBuild || !show || !status) return null;
 
   return (
     <div 

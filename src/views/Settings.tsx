@@ -1,18 +1,18 @@
 import { Globe, Save, ShieldCheck, ShieldAlert, Building2, Check, Trash2, Eye, EyeOff, Copy } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
-import { getCurrentAppVersion, getAppPlatform, checkAndroidUpdate } from "../lib/appUpdater";
+import { getCurrentAppVersion, getAppPlatform, checkAndroidUpdate, getDistributionFlavor } from "../lib/appUpdater";
 import { triggerAppUpdate } from "../components/UpdateNotification";
 
 interface SettingsProps {
   authPin: string;
-  biometricEnabled: boolean;
+  biometricEnabled?: boolean;
   currency: string;
   lockTimer: string;
   businessLedgerName: string;
   personalLedgerName: string;
   onSave: (settings: {
     authPin: string;
-    biometricEnabled: boolean;
+    biometricEnabled?: boolean;
     currency: string;
     lockTimer: string;
     businessLedgerName: string;
@@ -23,23 +23,34 @@ interface SettingsProps {
   // Desktop app props
   autoStart?: boolean;
   onToggleAutoStart?: (val: boolean) => void;
+  onOpenAppDirectory?: () => void;
+  onOpenDataDirectory?: () => void;
+  onCheckUpdates?: () => void;
+  exportDatabase?: () => Promise<string | null>;
+  importDatabase?: (content: string) => Promise<boolean>;
+  onExportCsv?: () => void;
 }
 
 export function Settings({
   authPin,
-  biometricEnabled,
+  biometricEnabled = false,
   currency,
   lockTimer,
   businessLedgerName,
   personalLedgerName,
   onSave,
   onStartFresh,
-  autoStart,
+  autoStart = false,
   onToggleAutoStart,
+  onOpenAppDirectory,
+  onOpenDataDirectory,
+  onCheckUpdates,
+  exportDatabase,
+  importDatabase,
+  onExportCsv,
 }: SettingsProps) {
   // Draft state for form
   const [draftPin, setDraftPin] = useState(authPin);
-  const [draftBio, setDraftBio] = useState(biometricEnabled);
   const [draftCurrency, setDraftCurrency] = useState(currency);
   const [draftLockTimer, setDraftLockTimer] = useState(lockTimer);
   const [draftBusinessLedgerName, setDraftBusinessLedgerName] = useState(businessLedgerName);
@@ -49,6 +60,7 @@ export function Settings({
   const [appVersion, setAppVersion] = useState("Loading...");
   const [updateStatus, setUpdateStatus] = useState<string>('');
   const [checking, setChecking] = useState(false);
+  const [isStoreBuild, setIsStoreBuild] = useState(false);
 
   useEffect(() => {
     getCurrentAppVersion()
@@ -58,6 +70,10 @@ export function Settings({
       .catch(() => {
         setAppVersion("Version 1.0");
       });
+
+    getDistributionFlavor().then((flavor) => {
+      setIsStoreBuild(flavor === 'store');
+    });
   }, []);
 
   useEffect(() => {
@@ -121,12 +137,11 @@ export function Settings({
   // Sync drafts when upstream props change (e.g. on mount)
   useEffect(() => {
     setDraftPin(authPin);
-    setDraftBio(biometricEnabled);
     setDraftCurrency(currency);
     setDraftLockTimer(lockTimer);
     setDraftBusinessLedgerName(businessLedgerName);
     setDraftPersonalLedgerName(personalLedgerName);
-  }, [authPin, biometricEnabled, currency, lockTimer, businessLedgerName, personalLedgerName]);
+  }, [authPin, currency, lockTimer, businessLedgerName, personalLedgerName]);
 
   const pinError = draftPin.length > 0 && draftPin.length < 4 ? "PIN must be exactly 4 digits." : "";
   const bLedgerError = draftBusinessLedgerName.trim().length === 0 ? "Business ledger name cannot be empty." : "";
@@ -135,19 +150,18 @@ export function Settings({
 
   const handleDiscard = useCallback(() => {
     setDraftPin(authPin);
-    setDraftBio(biometricEnabled);
     setDraftCurrency(currency);
     setDraftLockTimer(lockTimer);
     setDraftBusinessLedgerName(businessLedgerName);
     setDraftPersonalLedgerName(personalLedgerName);
     setSaved(false);
-  }, [authPin, biometricEnabled, currency, lockTimer, businessLedgerName, personalLedgerName]);
+  }, [authPin, currency, lockTimer, businessLedgerName, personalLedgerName]);
 
   const handleSave = () => {
     if (!canSave) return;
     onSave({
       authPin: draftPin,
-      biometricEnabled: draftBio,
+      biometricEnabled: false,
       currency: draftCurrency,
       lockTimer: draftLockTimer,
       businessLedgerName: draftBusinessLedgerName.trim(),
@@ -265,22 +279,6 @@ export function Settings({
                 {pinError && <p className="text-[var(--color-error)] text-xs mt-1">{pinError}</p>}
               </div>
             </div>
-            <div className="h-px bg-[var(--color-outline)]/50 w-full"></div>
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <label className="font-semibold text-base text-[var(--color-on-surface)] cursor-pointer">Biometric Authentication</label>
-                <p className="text-[13px] text-[var(--color-on-surface-variant)] mt-1">Enable fingerprint/face ID as a secure and fast unlock method.</p>
-              </div>
-              <div className="pt-1">
-                <button
-                  onClick={() => setDraftBio(!draftBio)}
-                  className={`w-10 h-5 rounded-full relative transition-colors ${draftBio ? "bg-[var(--color-primary)]" : "bg-[var(--color-outline)]"}`}
-                >
-                  <div className={`absolute top-0.5 bottom-0.5 w-4 bg-white rounded-full transition-all ${draftBio ? "left-[22px]" : "left-[2px]"}`}></div>
-                </button>
-              </div>
-            </div>
-
             <div className="h-px bg-[var(--color-outline)]/50 w-full"></div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
@@ -406,32 +404,36 @@ export function Settings({
               </div>
             </div>
 
-            <div className="h-px bg-[var(--color-outline)]/50 w-full"></div>
+            {!isStoreBuild && (
+              <>
+                <div className="h-px bg-[var(--color-outline)]/50 w-full"></div>
 
-            <div className="text-[13px] text-[var(--color-on-surface-variant)] leading-relaxed">
-              To get the latest version with new features and bug fixes, download the newest installer from Thisara and simply run it - your data will NOT be lost. The installer automatically updates the app without needing to uninstall first.
-            </div>
+                <div className="text-[13px] text-[var(--color-on-surface-variant)] leading-relaxed">
+                  To get the latest version with new features and bug fixes, download the newest installer from Thisara and simply run it - your data will NOT be lost. The installer automatically updates the app without needing to uninstall first.
+                </div>
 
-            <div className="flex flex-col gap-2">
-              <div>
-                <button
-                  onClick={handleCheckUpdates}
-                  disabled={checking}
-                  className="px-4 py-2 bg-[var(--color-primary)] text-white text-sm rounded hover:bg-[var(--color-secondary-variant)] transition-colors disabled:opacity-50 font-medium"
-                >
-                  {checking ? 'Checking...' : 'Check for Updates'}
-                </button>
-              </div>
-              {updateStatus && (
-                <p className="text-xs text-[var(--color-secondary)] font-medium mt-1 animate-pulse">
-                  {updateStatus}
-                </p>
-              )}
-            </div>
+                <div className="flex flex-col gap-2">
+                  <div>
+                    <button
+                      onClick={handleCheckUpdates}
+                      disabled={checking}
+                      className="px-4 py-2 bg-[var(--color-primary)] text-white text-sm rounded hover:bg-[var(--color-secondary-variant)] transition-colors disabled:opacity-50 font-medium"
+                    >
+                      {checking ? 'Checking...' : 'Check for Updates'}
+                    </button>
+                  </div>
+                  {updateStatus && (
+                    <p className="text-xs text-[var(--color-secondary)] font-medium mt-1 animate-pulse">
+                      {updateStatus}
+                    </p>
+                  )}
+                </div>
 
-            <div className="text-[12px] text-[var(--color-secondary)] font-medium bg-[var(--color-primary)]/5 p-3 rounded border border-[var(--color-primary)]/10">
-              Note: Your transactions, loans, and savings data are safely stored and will remain after updating.
-            </div>
+                <div className="text-[12px] text-[var(--color-secondary)] font-medium bg-[var(--color-primary)]/5 p-3 rounded border border-[var(--color-primary)]/10">
+                  Note: Your transactions, loans, and savings data are safely stored and will remain after updating.
+                </div>
+              </>
+            )}
           </div>
         </section>
 

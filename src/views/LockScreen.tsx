@@ -1,4 +1,4 @@
-import { Fingerprint, GripHorizontal, Lock, Terminal, ShieldAlert, AlertTriangle } from "lucide-react";
+import { GripHorizontal, Lock, Terminal, ShieldAlert, AlertTriangle } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { cn } from "../lib/utils";
 import { STORAGE_KEYS } from "../data";
@@ -6,7 +6,7 @@ import { STORAGE_KEYS } from "../data";
 interface LockScreenProps {
   onUnlock: () => void;
   authPin: string;
-  biometricEnabled: boolean;
+  biometricEnabled?: boolean;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -15,7 +15,14 @@ const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 function getLockoutState(): { lockedUntil: number; failedCount: number } {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.lockout);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.lockedUntil > 0 && parsed.lockedUntil <= Date.now()) {
+        localStorage.removeItem(STORAGE_KEYS.lockout);
+        return { lockedUntil: 0, failedCount: 0 };
+      }
+      return parsed;
+    }
   } catch {
     // ignore
   }
@@ -30,22 +37,27 @@ function clearLockoutState() {
   localStorage.removeItem(STORAGE_KEYS.lockout);
 }
 
-export function LockScreen({ onUnlock, authPin, biometricEnabled }: LockScreenProps) {
+export function LockScreen({ onUnlock, authPin }: LockScreenProps) {
   const [pin, setPin] = useState("");
-  const [tab, setTab] = useState<"pin" | "bio">(authPin ? "pin" : "bio");
   const [errorHighlight, setErrorHighlight] = useState(false);
-  const [failedAttempts, setFailedAttempts] = useState(0);
-  const [lockedUntil, setLockedUntil] = useState(0);
+  const [failedAttempts, setFailedAttempts] = useState(() => getLockoutState().failedCount);
+  const [lockedUntil, setLockedUntil] = useState(() => getLockoutState().lockedUntil);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
-  const hasSecuritySetup = authPin.length > 0 || biometricEnabled;
+  const hasSecuritySetup = Boolean(authPin && authPin.length > 0);
   const isLockedOut = lockedUntil > Date.now();
 
-  // Load lockout state on mount
+  // Load lockout state on mount and immediately clear if expired
   useEffect(() => {
     const state = getLockoutState();
-    setFailedAttempts(state.failedCount);
-    setLockedUntil(state.lockedUntil);
+    if (state.lockedUntil > 0 && state.lockedUntil <= Date.now()) {
+      clearLockoutState();
+      setFailedAttempts(0);
+      setLockedUntil(0);
+    } else {
+      setFailedAttempts(state.failedCount);
+      setLockedUntil(state.lockedUntil);
+    }
   }, []);
 
   // Countdown timer for lockout
@@ -125,7 +137,7 @@ export function LockScreen({ onUnlock, authPin, biometricEnabled }: LockScreenPr
           </div>
           <h1 className="text-2xl font-bold text-[var(--color-on-surface)] mb-2">No Security Configured</h1>
           <p className="text-sm text-[var(--color-on-surface-variant)] mb-8">
-            Please navigate to Settings after signing in to configure a secure unlocking method (PIN or Biometric).
+            Please navigate to Settings after signing in to configure a secure unlocking PIN.
           </p>
           <button
             onClick={onUnlock}
@@ -137,6 +149,8 @@ export function LockScreen({ onUnlock, authPin, biometricEnabled }: LockScreenPr
       </div>
     );
   }
+
+  const remainingAttempts = Math.max(0, MAX_ATTEMPTS - failedAttempts);
 
   return (
     <div className="min-h-screen flex flex-col bg-[var(--color-background)] items-center justify-center relative select-none">
@@ -177,136 +191,85 @@ export function LockScreen({ onUnlock, authPin, biometricEnabled }: LockScreenPr
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="flex border-b border-[var(--color-outline)] bg-[var(--color-surface)]">
-          <button
-            onClick={() => authPin && setTab("pin")}
-            className={cn(
-              "flex-1 py-3 text-sm flex items-center justify-center gap-2 font-medium transition-colors",
-              tab === "pin"
-                ? "text-[var(--color-primary)] border-b-2 border-[var(--color-primary)] bg-[var(--color-surface-variant)] cursor-default"
-                : "text-[var(--color-on-surface-variant)] hover:bg-[var(--color-outline)] opacity-50"
-            )}
-            disabled={!authPin}
-          >
-            <GripHorizontal size={18} /> PIN Entry {!authPin && "(Not Set)"}
-          </button>
-          <button
-            onClick={() => biometricEnabled && !isLockedOut && setTab("bio")}
-            className={cn(
-              "flex-1 py-3 text-sm flex items-center justify-center gap-2 font-medium transition-colors",
-              tab === "bio"
-                ? "text-[var(--color-primary)] border-b-2 border-[var(--color-primary)] bg-[var(--color-surface-variant)] cursor-default"
-                : "text-[var(--color-on-surface-variant)] hover:bg-[var(--color-outline)] opacity-50",
-              isLockedOut && "opacity-30 cursor-not-allowed"
-            )}
-            disabled={!biometricEnabled || isLockedOut}
-          >
-            <Fingerprint size={18} /> Biometrics {!biometricEnabled && "(Not Set)"}
-          </button>
+        {/* Sub-header bar */}
+        <div className="flex items-center justify-center gap-2 py-3 text-sm font-medium text-[var(--color-primary)] border-b border-[var(--color-outline)] bg-[var(--color-surface)]">
+          <GripHorizontal size={18} />
+          <span>PIN Verification</span>
         </div>
 
         {/* Auth Area */}
-        {tab === "pin" && (
-          <div className="p-8 bg-[var(--color-surface-variant)] flex flex-col items-center justify-center">
-            <div className="flex items-start gap-3 w-full bg-[var(--color-surface-lowest)] border border-[var(--color-outline)] p-4 rounded mb-6">
-              <Terminal className="text-[var(--color-on-surface-variant)] shrink-0" size={20} />
-              <div>
-                <p className="text-xs font-semibold text-[var(--color-on-surface)] uppercase tracking-wider">Terminal Security Active</p>
-                <p className="text-xs text-[var(--color-on-surface-variant)] mt-1 font-mono">
-                  {MAX_ATTEMPTS - failedAttempts} attempt{MAX_ATTEMPTS - failedAttempts !== 1 ? "s" : ""} remaining before 15-minute lockout.
-                </p>
-              </div>
+        <div className="p-8 bg-[var(--color-surface-variant)] flex flex-col items-center justify-center">
+          <div className="flex items-start gap-3 w-full bg-[var(--color-surface-lowest)] border border-[var(--color-outline)] p-4 rounded mb-6">
+            <Terminal className="text-[var(--color-on-surface-variant)] shrink-0" size={20} />
+            <div>
+              <p className="text-xs font-semibold text-[var(--color-on-surface)] uppercase tracking-wider">Terminal Security Active</p>
+              <p className="text-xs text-[var(--color-on-surface-variant)] mt-1 font-mono">
+                {remainingAttempts} attempt{remainingAttempts !== 1 ? "s" : ""} remaining before 15-minute lockout.
+              </p>
             </div>
+          </div>
 
-            <div className="flex gap-4 mb-8">
-              {[0, 1, 2, 3].map((index) => {
-                const val = pin[index];
-                return (
-                  <div
-                    key={index}
-                    className={cn(
-                      "w-16 h-20 bg-[var(--color-surface-lowest)] border rounded flex items-center justify-center text-[var(--color-on-surface)] text-3xl font-mono shadow-inner transition-colors",
-                      isLockedOut
-                        ? "border-[var(--color-outline)] opacity-50"
-                        : errorHighlight
-                          ? "border-[var(--color-error)] text-[var(--color-error)]"
-                          : val
-                            ? "border-[var(--color-secondary)]"
-                            : "border-[var(--color-outline)]"
-                    )}
-                  >
-                    {val ? "•" : "-"}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Numpad */}
-            <div className="grid grid-cols-3 gap-2 w-[240px]">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
-                <button
-                  key={num}
-                  onClick={() => handlePinEntry(num.toString())}
-                  disabled={isLockedOut}
+          <div className="flex gap-4 mb-8">
+            {[0, 1, 2, 3].map((index) => {
+              const val = pin[index];
+              return (
+                <div
+                  key={index}
                   className={cn(
-                    "h-12 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded font-mono text-[var(--color-on-surface)] transition-colors",
-                    isLockedOut ? "opacity-30 cursor-not-allowed" : "hover:bg-[var(--color-outline-variant)]"
+                    "w-16 h-20 bg-[var(--color-surface-lowest)] border rounded flex items-center justify-center text-[var(--color-on-surface)] text-3xl font-mono shadow-inner transition-colors",
+                    isLockedOut
+                      ? "border-[var(--color-outline)] opacity-50"
+                      : errorHighlight
+                        ? "border-[var(--color-error)] text-[var(--color-error)]"
+                        : val
+                          ? "border-[var(--color-secondary)]"
+                          : "border-[var(--color-outline)]"
                   )}
                 >
-                  {num}
-                </button>
-              ))}
-              <div className="h-12"></div>
+                  {val ? "•" : "-"}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Numpad */}
+          <div className="grid grid-cols-3 gap-2 w-[240px]">
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
               <button
-                onClick={() => handlePinEntry("0")}
+                key={num}
+                onClick={() => handlePinEntry(num.toString())}
                 disabled={isLockedOut}
                 className={cn(
                   "h-12 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded font-mono text-[var(--color-on-surface)] transition-colors",
                   isLockedOut ? "opacity-30 cursor-not-allowed" : "hover:bg-[var(--color-outline-variant)]"
                 )}
               >
-                0
+                {num}
               </button>
-              <button
-                onClick={() => handlePinEntry("back")}
-                disabled={isLockedOut}
-                className={cn(
-                  "h-12 bg-[var(--color-surface-lowest)] border border-[var(--color-outline)] rounded text-[var(--color-on-surface-variant)] transition-colors flex items-center justify-center",
-                  isLockedOut ? "opacity-30 cursor-not-allowed" : "hover:bg-[var(--color-error)] hover:text-white"
-                )}
-              >
-                ⌫
-              </button>
-            </div>
+            ))}
+            <div className="h-12"></div>
+            <button
+              onClick={() => handlePinEntry("0")}
+              disabled={isLockedOut}
+              className={cn(
+                "h-12 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded font-mono text-[var(--color-on-surface)] transition-colors",
+                isLockedOut ? "opacity-30 cursor-not-allowed" : "hover:bg-[var(--color-outline-variant)]"
+              )}
+            >
+              0
+            </button>
+            <button
+              onClick={() => handlePinEntry("back")}
+              disabled={isLockedOut}
+              className={cn(
+                "h-12 bg-[var(--color-surface-lowest)] border border-[var(--color-outline)] rounded text-[var(--color-on-surface-variant)] transition-colors flex items-center justify-center",
+                isLockedOut ? "opacity-30 cursor-not-allowed" : "hover:bg-[var(--color-error)] hover:text-white"
+              )}
+            >
+              ⌫
+            </button>
           </div>
-        )}
-
-        {tab === "bio" && (
-          <div className="p-8 bg-[var(--color-surface-variant)] flex flex-col items-center justify-center text-center h-[380px]">
-            <Fingerprint size={64} className="text-[var(--color-on-surface-variant)] mb-6" />
-            <p className="text-[var(--color-on-surface)] font-medium mb-8">Scan to authenticate</p>
-
-            <div className="w-full max-w-[320px]">
-              <button
-                disabled={isLockedOut}
-                onClick={() => {
-                  if (isLockedOut) return;
-                  clearLockoutState();
-                  onUnlock();
-                }}
-                className={cn(
-                  "w-full h-12 text-sm font-bold rounded border border-transparent transition-colors flex items-center justify-center gap-2",
-                  isLockedOut
-                    ? "bg-[var(--color-outline)] text-[var(--color-on-surface-variant)] opacity-50 cursor-not-allowed"
-                    : "bg-[var(--color-secondary)] text-[var(--color-on-secondary)] hover:opacity-80"
-                )}
-              >
-                SIMULATE SCAN SUCCESS
-              </button>
-            </div>
-          </div>
-        )}
+        </div>
 
         {/* Footer */}
         <div className="px-6 py-3 bg-[var(--color-surface)] border-t border-[var(--color-outline)] flex justify-between items-center font-mono text-[11px] text-[var(--color-on-surface-variant)]">

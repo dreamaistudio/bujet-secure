@@ -43,6 +43,13 @@ public class AppUpdatePlugin extends Plugin {
         cleanupOldApks();
     }
 
+    @PluginMethod
+    public void getDistributionFlavor(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("flavor", "direct");
+        call.resolve(ret);
+    }
+
     private void cleanupOldApks() {
         try {
             File downloadDir = getContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);

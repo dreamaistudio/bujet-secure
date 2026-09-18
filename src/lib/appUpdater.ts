@@ -24,6 +24,7 @@ interface AppUpdatePluginInterface {
   canRequestPackageInstalls(): Promise<{ canInstall: boolean }>;
   openInstallPermissionSettings(): Promise<void>;
   installUpdate(): Promise<{ launched?: boolean; requiresPermission?: boolean }>;
+  getDistributionFlavor?(): Promise<{ flavor: string }>;
   addListener(
     eventName: 'downloadProgress',
     listenerFunc: (data: DownloadProgressEvent) => void
@@ -31,6 +32,31 @@ interface AppUpdatePluginInterface {
 }
 
 export const NativeAppUpdate = registerPlugin<AppUpdatePluginInterface>('AppUpdatePlugin');
+
+export type DistributionFlavor = 'direct' | 'store';
+
+let cachedFlavor: DistributionFlavor | null = null;
+
+export async function getDistributionFlavor(): Promise<DistributionFlavor> {
+  if (cachedFlavor) return cachedFlavor;
+  if (getAppPlatform() !== 'android') {
+    cachedFlavor = 'direct';
+    return 'direct';
+  }
+  try {
+    const res = await NativeAppUpdate.getDistributionFlavor?.();
+    cachedFlavor = res?.flavor === 'store' ? 'store' : 'direct';
+    return cachedFlavor;
+  } catch {
+    cachedFlavor = 'direct';
+    return 'direct';
+  }
+}
+
+export async function isStoreDistribution(): Promise<boolean> {
+  const flavor = await getDistributionFlavor();
+  return flavor === 'store';
+}
 
 export function getAppPlatform(): AppPlatform {
   if (typeof window !== 'undefined' && (window as any).electronAPI) {
@@ -96,6 +122,12 @@ export async function getCurrentAppVersion(): Promise<string> {
 
 export async function checkAndroidUpdate(): Promise<UpdateCheckResult> {
   const currentVersion = await getCurrentAppVersion();
+  const flavor = await getDistributionFlavor();
+
+  // Store builds must never query GitHub releases or prompt self-updates
+  if (flavor === 'store') {
+    return { hasUpdate: false, currentVersion };
+  }
 
   try {
     const response = await fetch(

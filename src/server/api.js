@@ -79,6 +79,22 @@ function authMiddleware(req, res, next) {
   next();
 }
 
+// GET /api/system-info - exposes system details for local client connection settings
+router.get('/system-info', (req, res) => {
+  try {
+    res.json({
+      localIp: getLocalIpAddress(),
+      authToken: syncToken,
+      dbType: db.dbType
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Enforce token authentication on ALL remaining API routes
+router.use(authMiddleware);
+
 // GET /api/transactions
 router.get('/transactions', (req, res) => {
   try {
@@ -396,19 +412,6 @@ router.post('/sync', authMiddleware, (req, res) => {
   }
 });
 
-
-// GET /api/system-info - exposes system details for client connection settings
-router.get('/system-info', (req, res) => {
-  try {
-    res.json({
-      localIp: getLocalIpAddress(),
-      authToken: syncToken,
-      dbType: db.dbType
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // GET /api/autostart - check if auto-start on login is configured
 router.get('/autostart', (req, res) => {

@@ -128,9 +128,22 @@ export default function App() {
   const [isApiAvailable, setIsApiAvailable] = useState(false);
   const [syncStatus, setSyncStatus] = useState("Local Only");
   const [localIp, setLocalIp] = useState("");
-  const [authToken, setAuthToken] = useState("");
+  const [authToken, setAuthToken] = useState(() => sessionStorage.getItem("sync_auth_token") || "");
+  const authTokenRef = useRef<string>(authToken);
   const [autoStart, setAutoStart] = useState(false);
   const [showResetToast, setShowResetToast] = useState(false);
+
+  const apiFetch = useCallback(async (url: string, init?: RequestInit) => {
+    const token = authTokenRef.current;
+    const headers = new Headers(init?.headers);
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+    return fetch(url, {
+      ...init,
+      headers
+    });
+  }, []);
 
   // Undo last transaction state
   const [lastAction, setLastAction] = useState<{
@@ -158,10 +171,12 @@ export default function App() {
         const info = await res.json();
         setLocalIp(info.localIp);
         setAuthToken(info.authToken);
+        authTokenRef.current = info.authToken;
+        sessionStorage.setItem("sync_auth_token", info.authToken);
         setIsApiAvailable(true);
 
         // Fetch auto-start status
-        const autoStartRes = await fetch("http://localhost:3001/api/autostart");
+        const autoStartRes = await apiFetch("http://localhost:3001/api/autostart");
         if (autoStartRes.ok) {
           const autoStartData = await autoStartRes.json();
           setAutoStart(autoStartData.autoStart);
@@ -177,11 +192,10 @@ export default function App() {
         const localBillPayments = loadBillPayments();
 
         // Perform bidirectional sync with the server database
-        const syncResponse = await fetch("http://localhost:3001/api/sync", {
+        const syncResponse = await apiFetch("http://localhost:3001/api/sync", {
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${info.authToken}`
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({
             transactions: localTxs,
@@ -366,7 +380,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        await fetch("http://localhost:3001/api/transactions", {
+        await apiFetch("http://localhost:3001/api/transactions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(newTx)
@@ -378,7 +392,7 @@ export default function App() {
 
     setLastAction({ type: 'add', tx: newTx });
     startUndoCountdown();
-  }, [isApiAvailable, startUndoCountdown]);
+  }, [isApiAvailable, startUndoCountdown, apiFetch]);
 
   const handleDeleteTransaction = useCallback(async (id: string) => {
     // Capture the transaction before removing it so we can restore on undo
@@ -387,7 +401,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        await fetch(`http://localhost:3001/api/transactions/${id}`, {
+        await apiFetch(`http://localhost:3001/api/transactions/${id}`, {
           method: "DELETE"
         });
       } catch (err) {
@@ -399,7 +413,7 @@ export default function App() {
       setLastAction({ type: 'delete', tx: deletedTx });
       startUndoCountdown();
     }
-  }, [isApiAvailable, transactions, startUndoCountdown]);
+  }, [isApiAvailable, transactions, startUndoCountdown, apiFetch]);
 
   const handleMarkCleared = useCallback(async (id: string) => {
     const tx = transactions.find(t => t.id === id);
@@ -408,7 +422,7 @@ export default function App() {
     setTransactions(prev => prev.map(t => t.id === id ? updated : t));
     if (isApiAvailable) {
       try {
-        await fetch(`http://localhost:3001/api/transactions`, {
+        await apiFetch(`http://localhost:3001/api/transactions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updated)
@@ -417,7 +431,7 @@ export default function App() {
         console.error('Failed to mark transaction as cleared:', err);
       }
     }
-  }, [transactions, isApiAvailable]);
+  }, [transactions, isApiAvailable, apiFetch]);
 
   const handleRestoreTransaction = useCallback(async (tx: Transaction) => {
     const now = Date.now();
@@ -426,7 +440,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        await fetch("http://localhost:3001/api/transactions", {
+        await apiFetch("http://localhost:3001/api/transactions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(restoredTx)
@@ -435,7 +449,7 @@ export default function App() {
         console.error("Failed to restore transaction:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const handleSaveSettings = useCallback(async (newSettings: AppSettings) => {
     let finalTransactions = transactions;
@@ -501,28 +515,28 @@ export default function App() {
       if (isApiAvailable) {
         try {
           for (const tx of finalTransactions) {
-            await fetch("http://localhost:3001/api/transactions", {
+            await apiFetch("http://localhost:3001/api/transactions", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(tx)
             });
           }
           for (const loan of convertedLoans) {
-            await fetch("http://localhost:3001/api/loans", {
+            await apiFetch("http://localhost:3001/api/loans", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(loan)
             });
           }
           for (const saving of convertedSavings) {
-            await fetch("http://localhost:3001/api/savings", {
+            await apiFetch("http://localhost:3001/api/savings", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(saving)
             });
           }
           for (const bill of convertedBills) {
-            await fetch("http://localhost:3001/api/bills", {
+            await apiFetch("http://localhost:3001/api/bills", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(bill)
@@ -538,7 +552,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        await fetch("http://localhost:3001/api/settings", {
+        await apiFetch("http://localhost:3001/api/settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(newSettings)
@@ -547,12 +561,12 @@ export default function App() {
         console.error("Failed to sync settings:", err);
       }
     }
-  }, [settings, transactions, isApiAvailable]);
+  }, [settings, transactions, isApiAvailable, apiFetch]);
 
   const handleToggleAutoStart = useCallback(async (val: boolean) => {
     if (isApiAvailable) {
       try {
-        const res = await fetch("http://localhost:3001/api/autostart", {
+        const res = await apiFetch("http://localhost:3001/api/autostart", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ autoStart: val })
@@ -565,13 +579,13 @@ export default function App() {
         console.error("Failed to toggle auto-start:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const handleStartFresh = useCallback(async () => {
     // Step 1: Wipe the server database via the new atomic reset endpoint
     if (isApiAvailable) {
       try {
-        const res = await fetch("http://localhost:3001/api/reset", {
+        const res = await apiFetch("http://localhost:3001/api/reset", {
           method: "DELETE"
         });
         if (!res.ok) {
@@ -619,7 +633,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        await fetch("http://localhost:3001/api/loans", {
+        await apiFetch("http://localhost:3001/api/loans", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(newLoan)
@@ -628,21 +642,21 @@ export default function App() {
         console.error("Failed to POST loan:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const handleDeleteLoan = useCallback(async (id: string) => {
     setLoans((prev) => prev.filter((l) => l.id !== id));
 
     if (isApiAvailable) {
       try {
-        await fetch(`http://localhost:3001/api/loans/${id}`, {
+        await apiFetch(`http://localhost:3001/api/loans/${id}`, {
           method: "DELETE"
         });
       } catch (err) {
         console.error("Failed to DELETE loan:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const handleMarkLoanPaid = useCallback(async (id: string, addAsTransaction: boolean) => {
     const loan = loans.find(l => l.id === id);
@@ -654,7 +668,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        await fetch("http://localhost:3001/api/loans", {
+        await apiFetch("http://localhost:3001/api/loans", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(updated)
@@ -685,7 +699,7 @@ export default function App() {
 
       if (isApiAvailable) {
         try {
-          await fetch("http://localhost:3001/api/transactions", {
+          await apiFetch("http://localhost:3001/api/transactions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(tx)
@@ -695,7 +709,7 @@ export default function App() {
         }
       }
     }
-  }, [loans, isApiAvailable]);
+  }, [loans, isApiAvailable, apiFetch]);
 
   // --- Savings CRUD handlers ---
 
@@ -706,7 +720,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        await fetch("http://localhost:3001/api/savings", {
+        await apiFetch("http://localhost:3001/api/savings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(newSaving)
@@ -715,21 +729,21 @@ export default function App() {
         console.error("Failed to POST saving:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const handleDeleteSaving = useCallback(async (id: string) => {
     setSavings((prev) => prev.filter((s) => s.id !== id));
 
     if (isApiAvailable) {
       try {
-        await fetch(`http://localhost:3001/api/savings/${id}`, {
+        await apiFetch(`http://localhost:3001/api/savings/${id}`, {
           method: "DELETE"
         });
       } catch (err) {
         console.error("Failed to DELETE saving:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const handleWithdrawSaving = useCallback(async (id: string, addAsTransaction: boolean) => {
     const saving = savings.find(s => s.id === id);
@@ -741,7 +755,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        await fetch("http://localhost:3001/api/savings", {
+        await apiFetch("http://localhost:3001/api/savings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(updated)
@@ -767,7 +781,7 @@ export default function App() {
 
       if (isApiAvailable) {
         try {
-          await fetch("http://localhost:3001/api/transactions", {
+          await apiFetch("http://localhost:3001/api/transactions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(tx)
@@ -777,7 +791,7 @@ export default function App() {
         }
       }
     }
-  }, [savings, isApiAvailable]);
+  }, [savings, isApiAvailable, apiFetch]);
 
   // --- Keepers CRUD handlers ---
 
@@ -786,7 +800,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        await fetch("http://localhost:3001/api/keepers", {
+        await apiFetch("http://localhost:3001/api/keepers", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(keeper)
@@ -795,14 +809,14 @@ export default function App() {
         console.error("Failed to POST keeper:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const handleEditKeeper = useCallback(async (id: string, name: string, type: 'bank' | 'wallet' | 'person') => {
     setKeepers((prev) => prev.map((k) => k.id === id ? { ...k, name, type } : k));
 
     if (isApiAvailable) {
       try {
-        await fetch(`http://localhost:3001/api/keepers/${id}`, {
+        await apiFetch(`http://localhost:3001/api/keepers/${id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name, type })
@@ -811,7 +825,7 @@ export default function App() {
         console.error("Failed to PUT keeper:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const handleDeleteKeeper = useCallback(async (id: string) => {
     // Check if keeper is referenced in client savings
@@ -822,7 +836,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        const res = await fetch(`http://localhost:3001/api/keepers/${id}`, {
+        const res = await apiFetch(`http://localhost:3001/api/keepers/${id}`, {
           method: "DELETE"
         });
         if (!res.ok) {
@@ -836,7 +850,7 @@ export default function App() {
     }
     // Update local state if API succeeded (or if local-only)
     setKeepers((prev) => prev.filter((k) => k.id !== id));
-  }, [savings, isApiAvailable]);
+  }, [savings, isApiAvailable, apiFetch]);
 
   const handleEditTransaction = useCallback(async (updatedTx: Transaction) => {
     const now = Date.now();
@@ -847,7 +861,7 @@ export default function App() {
     
     if (isApiAvailable) {
       try {
-        await fetch("http://localhost:3001/api/transactions", {
+        await apiFetch("http://localhost:3001/api/transactions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(finalTx)
@@ -856,7 +870,7 @@ export default function App() {
         console.error("Failed to sync edited transaction:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const openAddModal = useCallback(() => setShowAddModal(true), []);
   
@@ -869,7 +883,7 @@ export default function App() {
 
     if (isApiAvailable) {
       try {
-        await fetch("http://localhost:3001/api/bills", {
+        await apiFetch("http://localhost:3001/api/bills", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(newBill)
@@ -878,21 +892,21 @@ export default function App() {
         console.error("Failed to POST bill:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const handleDeleteBill = useCallback(async (id: string) => {
     setBills((prev) => prev.filter((b) => b.id !== id));
 
     if (isApiAvailable) {
       try {
-        await fetch(`http://localhost:3001/api/bills/${id}`, {
+        await apiFetch(`http://localhost:3001/api/bills/${id}`, {
           method: "DELETE"
         });
       } catch (err) {
         console.error("Failed to DELETE bill:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const handleMarkBillPaid = useCallback(async (billId: string, addAsTransaction: boolean) => {
     const bill = bills.find(b => b.id === billId);
@@ -924,7 +938,7 @@ export default function App() {
       setTransactions(prev => [tx, ...prev]);
       if (isApiAvailable) {
         try {
-          await fetch("http://localhost:3001/api/transactions", {
+          await apiFetch("http://localhost:3001/api/transactions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(tx)
@@ -949,7 +963,7 @@ export default function App() {
       );
       if (isApiAvailable) {
         try {
-          await fetch("http://localhost:3001/api/bill-payments", {
+          await apiFetch("http://localhost:3001/api/bill-payments", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(updated)
@@ -972,7 +986,7 @@ export default function App() {
       setBillPayments(prev => [payment, ...prev]);
       if (isApiAvailable) {
         try {
-          await fetch("http://localhost:3001/api/bill-payments", {
+          await apiFetch("http://localhost:3001/api/bill-payments", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payment)
@@ -982,21 +996,21 @@ export default function App() {
         }
       }
     }
-  }, [bills, billPayments, isApiAvailable]);
+  }, [bills, billPayments, isApiAvailable, apiFetch]);
 
   const handleUnpayBill = useCallback(async (paymentId: string) => {
     setBillPayments((prev) => prev.filter((bp) => bp.id !== paymentId));
 
     if (isApiAvailable) {
       try {
-        await fetch(`http://localhost:3001/api/bill-payments/${paymentId}`, {
+        await apiFetch(`http://localhost:3001/api/bill-payments/${paymentId}`, {
           method: "DELETE"
         });
       } catch (err) {
         console.error("Failed to DELETE bill payment:", err);
       }
     }
-  }, [isApiAvailable]);
+  }, [isApiAvailable, apiFetch]);
 
   const openEditModal = useCallback((tx: Transaction) => {
     setEditingTransaction(tx);
@@ -1110,7 +1124,6 @@ export default function App() {
         return (
           <Settings
             authPin={settings.authPin}
-            biometricEnabled={settings.biometricEnabled}
             currency={settings.currency}
             lockTimer={settings.lockTimer}
             businessLedgerName={settings.businessLedgerName}
@@ -1152,7 +1165,6 @@ export default function App() {
       <LockScreen
         onUnlock={() => setIsLocked(false)}
         authPin={settings.authPin}
-        biometricEnabled={settings.biometricEnabled}
       />
     );
   }
@@ -1255,7 +1267,7 @@ export default function App() {
                 // Undo add = remove the transaction
                 setTransactions((prev) => prev.filter((t) => t.id !== action.tx.id));
                 if (isApiAvailable) {
-                  fetch(`http://localhost:3001/api/transactions/${action.tx.id}`, {
+                  apiFetch(`http://localhost:3001/api/transactions/${action.tx.id}`, {
                     method: 'DELETE'
                   }).catch((err) => console.error('Undo add failed:', err));
                 }
@@ -1265,7 +1277,7 @@ export default function App() {
                 const restoredTx = { ...action.tx, deleted: 0, updated_at: now };
                 setTransactions((prev) => [...prev, restoredTx].sort((a, b) => b.date.localeCompare(a.date)));
                 if (isApiAvailable) {
-                  fetch('http://localhost:3001/api/transactions', {
+                  apiFetch('http://localhost:3001/api/transactions', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(restoredTx)

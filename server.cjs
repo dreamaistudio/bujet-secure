@@ -20,8 +20,8 @@ async function start() {
   expressApp.use('/assets', express.static(assetsPath));
 
   const port = 3001;
-  expressApp.listen(port, '0.0.0.0', () => {
-    console.log(`Express sync server running on http://localhost:${port}`);
+  expressApp.listen(port, '127.0.0.1', () => {
+    console.log(`Express sync server running on http://127.0.0.1:${port}`);
   });
 }
 
