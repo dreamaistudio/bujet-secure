@@ -18,3 +18,9 @@ View your app in AI Studio: https://ai.studio/apps/736c806e-394f-49de-874f-405cf
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Release Verification & Documentation
+Before distributing or publishing any release, follow the mandatory [Pre-Release Checklist Protocol](docs/PRE_RELEASE_CHECKLIST.md):
+```bash
+npm run verify:release
+```
