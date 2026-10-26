@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { SavingsEntry, Keeper } from "../types";
 import { cn, formatCurrency, formatDate, generateId, getTodayString } from "../lib/utils";
+import { useBackButtonDismiss } from "../lib/backGuard";
 
 interface SavingsProps {
   savings: SavingsEntry[];
@@ -66,19 +67,33 @@ export function Savings({
   const [showManageKeepers, setShowManageKeepers] = useState(false);
   const [confirmWithdrawId, setConfirmWithdrawId] = useState<string | null>(null);
 
+  // Back closes the topmost open dialog instead of leaving the page. Without
+  // this the hardware back button skipped these dialogs entirely, so a
+  // half-filled form was discarded and the user was thrown to the Dashboard.
+  useBackButtonDismiss(
+    showAddModal || showManageKeepers || confirmWithdrawId !== null,
+    () => {
+      if (confirmWithdrawId !== null) setConfirmWithdrawId(null);
+      else if (showManageKeepers) setShowManageKeepers(false);
+      else setShowAddModal(false);
+    }
+  );
+
+  const activeKeepers = useMemo(() => keepers.filter((k) => !k.deleted), [keepers]);
+
   const sortedSavings = useMemo(() => {
-    const kept = savings.filter((s) => s.status === "kept");
-    const withdrawn = savings.filter((s) => s.status === "withdrawn");
+    const kept = savings.filter((s) => !s.deleted && s.status === "kept");
+    const withdrawn = savings.filter((s) => !s.deleted && s.status === "withdrawn");
     return [...kept, ...withdrawn];
   }, [savings]);
 
   const totalKept = useMemo(
-    () => savings.filter((s) => s.status === "kept").reduce((sum, s) => sum + s.amount, 0),
+    () => savings.filter((s) => !s.deleted && s.status === "kept").reduce((sum, s) => sum + s.amount, 0),
     [savings]
   );
 
   const keptCount = useMemo(
-    () => savings.filter((s) => s.status === "kept").length,
+    () => savings.filter((s) => !s.deleted && s.status === "kept").length,
     [savings]
   );
 
@@ -317,7 +332,7 @@ export function Savings({
         <AddSavingsModal
           onClose={() => setShowAddModal(false)}
           onAdd={onAddSaving}
-          keepers={keepers}
+          keepers={activeKeepers}
           onAddKeeper={onAddKeeper}
         />
       )}
@@ -326,7 +341,7 @@ export function Savings({
       {showManageKeepers && (
         <ManageKeepersModal
           onClose={() => setShowManageKeepers(false)}
-          keepers={keepers}
+          keepers={activeKeepers}
           onAddKeeper={onAddKeeper}
           onEditKeeper={onEditKeeper}
           onDeleteKeeper={onDeleteKeeper}
@@ -380,6 +395,8 @@ function ManageKeepersModal({
       name: name.trim(),
       type,
       created_at: new Date().toISOString(),
+      updated_at: Date.now(),
+      deleted: 0,
     };
     onAddKeeper(newKeeper);
     setName("");
@@ -600,10 +617,20 @@ function AddSavingsModal({ onClose, onAdd, keepers, onAddKeeper }: AddSavingsMod
   const [showMiniForm, setShowMiniForm] = useState(false);
   const [miniName, setMiniName] = useState("");
   const [miniType, setMiniType] = useState<'bank' | 'wallet' | 'person'>("person");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const validate = () => {
+    const e: Record<string, string> = {};
+    if (!selectedKeeperId) e.keeper = "Please select or create a keeper.";
+    const numAmt = parseFloat(amount);
+    if (!amount || isNaN(numAmt) || numAmt <= 0) e.amount = "Enter a valid positive amount.";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!selectedKeeperId || !amount || parseFloat(amount) <= 0) return;
+    if (!validate()) return;
 
     const selectedKeeper = keepers.find((k) => k.id === selectedKeeperId);
     if (!selectedKeeper) return;
@@ -630,6 +657,8 @@ function AddSavingsModal({ onClose, onAdd, keepers, onAddKeeper }: AddSavingsMod
       name: miniName.trim(),
       type: miniType,
       created_at: new Date().toISOString(),
+      updated_at: Date.now(),
+      deleted: 0,
     };
     onAddKeeper(newKeeper);
     setSelectedKeeperId(newKeeper.id);
@@ -642,9 +671,9 @@ function AddSavingsModal({ onClose, onAdd, keepers, onAddKeeper }: AddSavingsMod
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-xl shadow-2xl w-full max-w-md mx-4 animate-[slideUp_0.2s_ease-out]">
+      <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-xl shadow-2xl w-full max-w-md mx-4 animate-[slideUp_0.2s_ease-out] max-h-[85vh] flex flex-col">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-outline)]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-outline)] shrink-0">
           <h2 className="font-bold text-[var(--color-on-surface)] flex items-center gap-2">
             <PiggyBank size={20} className="text-blue-400" />
             New Savings Entry
@@ -654,191 +683,199 @@ function AddSavingsModal({ onClose, onAdd, keepers, onAddKeeper }: AddSavingsMod
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Keeper dropdown / mini form */}
-          <div>
-            <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-              Keeper
-            </label>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] text-left flex items-center justify-between focus:border-blue-500 focus:outline-none transition-colors shadow-sm"
-              >
-                {selectedKeeperId ? (
-                  (() => {
-                    const k = keepers.find((k) => k.id === selectedKeeperId);
-                    return k ? (
-                      <span className="flex items-center gap-2">
-                        {getKeeperIcon(k.type, 16)}
-                        <span className="font-medium">{k.name}</span>
-                        <span className="text-[10px] text-[var(--color-on-surface-variant)] font-normal">
-                          ({getKeeperTypeLabel(k.type)})
+        <form onSubmit={handleSubmit} className="flex flex-col min-h-0 flex-1 overflow-hidden">
+          <div className="p-5 space-y-4 overflow-y-auto max-h-[65vh] sm:max-h-none flex-1">
+            {/* Keeper dropdown / mini form */}
+            <div>
+              <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
+                Keeper
+              </label>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                  className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] text-left flex items-center justify-between focus:border-blue-500 focus:outline-none transition-colors shadow-sm"
+                >
+                  {selectedKeeperId ? (
+                    (() => {
+                      const k = keepers.find((k) => k.id === selectedKeeperId);
+                      return k ? (
+                        <span className="flex items-center gap-2">
+                          {getKeeperIcon(k.type, 16)}
+                          <span className="font-medium">{k.name}</span>
+                          <span className="text-[10px] text-[var(--color-on-surface-variant)] font-normal">
+                            ({getKeeperTypeLabel(k.type)})
+                          </span>
                         </span>
-                      </span>
-                    ) : (
-                      <span className="text-[var(--color-on-surface-variant)]/50">Select a Keeper</span>
-                    );
-                  })()
-                ) : (
-                  <span className="text-[var(--color-on-surface-variant)]/50">Select a Keeper</span>
-                )}
-                <span className="text-[10px] text-[var(--color-on-surface-variant)]">▼</span>
-              </button>
-
-              {isDropdownOpen && (
-                <div className="absolute left-0 right-0 mt-1 bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto divide-y divide-[var(--color-outline)]/20">
-                  {keepers.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-[var(--color-on-surface-variant)] text-center">
-                      No keepers configured
-                    </div>
+                      ) : (
+                        <span className="text-[var(--color-on-surface-variant)]/50">Select a Keeper</span>
+                      );
+                    })()
                   ) : (
-                    keepers.map((k) => (
-                      <button
-                        key={k.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedKeeperId(k.id);
-                          setIsDropdownOpen(false);
-                          setShowMiniForm(false);
-                        }}
-                        className="w-full px-3 py-2.5 text-left text-sm text-[var(--color-on-surface)] hover:bg-[var(--color-surface)] flex items-center gap-2 transition-colors"
-                      >
-                        {getKeeperIcon(k.type, 14)}
-                        <span>{k.name}</span>
-                        <span className="text-[10px] text-[var(--color-on-surface-variant)] ml-auto font-medium">
-                          ({getKeeperTypeLabel(k.type)})
-                        </span>
-                      </button>
-                    ))
+                    <span className="text-[var(--color-on-surface-variant)]/50">Select a Keeper</span>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowMiniForm(true);
-                      setIsDropdownOpen(false);
-                      setSelectedKeeperId("");
-                    }}
-                    className="w-full px-3 py-3 text-left text-xs font-bold text-blue-400 hover:bg-[var(--color-surface)] flex items-center gap-2 transition-colors"
-                  >
-                    <Plus size={14} />
-                    <span>+ Add New Keeper</span>
-                  </button>
-                </div>
-              )}
-            </div>
+                  <span className="text-[10px] text-[var(--color-on-surface-variant)]">▼</span>
+                </button>
 
-            {/* Inline Mini-Form */}
-            {showMiniForm && (
-              <div className="bg-[var(--color-surface)] border border-[var(--color-outline)] rounded-lg p-3 space-y-3 mt-3 shadow-inner animate-[slideUp_0.15s_ease-out]">
-                <div className="text-[11px] font-bold text-blue-400 uppercase tracking-wider">
-                  Create Keeper Inline
-                </div>
-                <div className="space-y-2.5">
-                  <input
-                    type="text"
-                    placeholder="Keeper Name (e.g. Mom, Sampath Bank)"
-                    value={miniName}
-                    onChange={(e) => setMiniName(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded text-xs text-[var(--color-on-surface)] focus:border-blue-500 focus:outline-none transition-colors"
-                  />
-                  <div className="grid grid-cols-3 gap-1">
-                    {(['bank', 'wallet', 'person'] as const).map((t) => (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => setMiniType(t)}
-                        className={cn(
-                          "py-1.5 text-[9px] font-bold uppercase tracking-wider rounded border transition-all text-center flex items-center justify-center gap-1",
-                          miniType === t
-                            ? "bg-blue-600 border-blue-600 text-white font-semibold"
-                            : "bg-[var(--color-surface-variant)] border-[var(--color-outline)] text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)]/80"
-                        )}
-                      >
-                        {getKeeperTypeLabel(t)}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex gap-2 justify-end pt-1">
-                    <button
-                      type="button"
-                      onClick={handleCreateMiniKeeper}
-                      className="px-3 py-1 bg-blue-600 text-white text-[10px] font-bold uppercase rounded hover:bg-blue-700 transition-colors shadow-sm"
-                    >
-                      Create & Select
-                    </button>
+                {isDropdownOpen && (
+                  <div className="absolute left-0 right-0 mt-1 bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto divide-y divide-[var(--color-outline)]/20">
+                    {keepers.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-[var(--color-on-surface-variant)] text-center">
+                        No keepers configured
+                      </div>
+                    ) : (
+                      keepers.map((k) => (
+                        <button
+                          key={k.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedKeeperId(k.id);
+                            setIsDropdownOpen(false);
+                            setShowMiniForm(false);
+                          }}
+                          className="w-full px-3 py-2.5 text-left text-sm text-[var(--color-on-surface)] hover:bg-[var(--color-surface)] flex items-center gap-2 transition-colors"
+                        >
+                          {getKeeperIcon(k.type, 14)}
+                          <span>{k.name}</span>
+                          <span className="text-[10px] text-[var(--color-on-surface-variant)] ml-auto font-medium">
+                            ({getKeeperTypeLabel(k.type)})
+                          </span>
+                        </button>
+                      ))
+                    )}
                     <button
                       type="button"
                       onClick={() => {
-                        setShowMiniForm(false);
-                        setMiniName("");
+                        setShowMiniForm(true);
+                        setIsDropdownOpen(false);
+                        setSelectedKeeperId("");
                       }}
-                      className="px-3 py-1 bg-[var(--color-surface-variant)] text-[var(--color-on-surface-variant)] text-[10px] font-bold uppercase rounded border border-[var(--color-outline)] hover:bg-[var(--color-surface-variant)]/80 transition-colors shadow-sm"
+                      className="w-full px-3 py-3 text-left text-xs font-bold text-blue-400 hover:bg-[var(--color-surface)] flex items-center gap-2 transition-colors"
                     >
-                      Cancel
+                      <Plus size={14} />
+                      <span>+ Add New Keeper</span>
                     </button>
                   </div>
-                </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* Amount + Date row */}
-          <div className="grid grid-cols-2 gap-3">
+              {/* Inline Mini-Form */}
+              {showMiniForm && (
+                <div className="bg-[var(--color-surface)] border border-[var(--color-outline)] rounded-lg p-3 space-y-3 mt-3 shadow-inner animate-[slideUp_0.15s_ease-out]">
+                  <div className="text-[11px] font-bold text-blue-400 uppercase tracking-wider">
+                    Create Keeper Inline
+                  </div>
+                  <div className="space-y-2.5">
+                    <input
+                      type="text"
+                      placeholder="Keeper Name (e.g. Mom, Sampath Bank)"
+                      value={miniName}
+                      onChange={(e) => setMiniName(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded text-xs text-[var(--color-on-surface)] focus:border-blue-500 focus:outline-none transition-colors"
+                    />
+                    <div className="grid grid-cols-3 gap-1">
+                      {(['bank', 'wallet', 'person'] as const).map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setMiniType(t)}
+                          className={cn(
+                            "py-1.5 text-[9px] font-bold uppercase tracking-wider rounded border transition-all text-center flex items-center justify-center gap-1",
+                            miniType === t
+                              ? "bg-blue-600 border-blue-600 text-white font-semibold"
+                              : "bg-[var(--color-surface-variant)] border-[var(--color-outline)] text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)]/80"
+                          )}
+                        >
+                          {getKeeperTypeLabel(t)}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex gap-2 justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={handleCreateMiniKeeper}
+                        className="px-3 py-1 bg-blue-600 text-white text-[10px] font-bold uppercase rounded hover:bg-blue-700 transition-colors shadow-sm"
+                      >
+                        Create & Select
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMiniForm(false);
+                          setMiniName("");
+                        }}
+                        className="px-3 py-1 bg-[var(--color-surface-variant)] text-[var(--color-on-surface-variant)] text-[10px] font-bold uppercase rounded border border-[var(--color-outline)] hover:bg-[var(--color-surface-variant)]/80 transition-colors shadow-sm"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {errors.keeper && <p className="text-[var(--color-error)] text-xs mt-1.5">{errors.keeper}</p>}
+            </div>
+
+            {/* Amount + Date row */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
+                  Amount
+                </label>
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => {
+                    setAmount(e.target.value);
+                    setErrors((prev) => ({ ...prev, amount: "" }));
+                  }}
+                  placeholder="0.00"
+                  min="0.01"
+                  step="0.01"
+                  className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] font-mono placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-blue-500 focus:outline-none transition-colors shadow-sm"
+                />
+                {errors.amount && <p className="text-[var(--color-error)] text-xs mt-1">{errors.amount}</p>}
+              </div>
+              <div>
+                <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
+                  <Calendar size={12} className="inline mr-1 -mt-0.5" />
+                  Date
+                </label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  required
+                  className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] focus:border-blue-500 focus:outline-none transition-colors shadow-sm"
+                />
+              </div>
+            </div>
+
+            {/* Notes */}
             <div>
               <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-                Amount
+                <FileText size={12} className="inline mr-1 -mt-0.5" />
+                Notes (Optional)
               </label>
-              <input
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="0.00"
-                min="0.01"
-                step="0.01"
-                required
-                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] font-mono placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-blue-500 focus:outline-none transition-colors shadow-sm"
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="e.g. Emergency fund, saving for laptop..."
+                rows={2}
+                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-blue-500 focus:outline-none transition-colors resize-none shadow-sm"
               />
             </div>
-            <div>
-              <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-                <Calendar size={12} className="inline mr-1 -mt-0.5" />
-                Date
-              </label>
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                required
-                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] focus:border-blue-500 focus:outline-none transition-colors shadow-sm"
-              />
-            </div>
-          </div>
-
-          {/* Notes */}
-          <div>
-            <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-              <FileText size={12} className="inline mr-1 -mt-0.5" />
-              Notes (Optional)
-            </label>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="e.g. Emergency fund, saving for laptop..."
-              rows={2}
-              className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-blue-500 focus:outline-none transition-colors resize-none shadow-sm"
-            />
           </div>
 
           {/* Submit */}
-          <button
-            type="submit"
-            className="w-full py-3 rounded font-bold text-sm transition-all flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-md font-semibold"
-          >
-            <PiggyBank size={16} />
-            Save Entry
-          </button>
+          <div className="px-5 pb-5 pt-2 shrink-0">
+            <button
+              type="submit"
+              className="w-full py-3 rounded font-bold text-sm transition-all flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-md font-semibold"
+            >
+              <PiggyBank size={16} />
+              Save Entry
+            </button>
+          </div>
         </form>
       </div>
     </div>

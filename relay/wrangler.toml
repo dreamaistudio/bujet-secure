@@ -1,0 +1,26 @@
+# Budget Secure post box — Cloudflare Worker settings.
+#
+# Upload it from the project folder with:
+#     npx wrangler login      (opens the browser once, click Allow)
+#     npx wrangler deploy
+#
+# Afterwards wrangler prints the address, e.g.
+#     https://budget-secure-relay.<your-name>.workers.dev
+# Put that address into Budget Secure on the PC (Settings), and the PC puts it
+# into the QR code so the phone learns it automatically.
+
+name = "budget-secure-relay"
+main = "src/worker.js"
+compatibility_date = "2025-05-01"
+
+[[durable_objects.bindings]]
+name = "MAILBOX"
+class_name = "MailboxObject"
+
+# SQLite-backed Durable Objects are the kind included in the free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MailboxObject"]
+
+[observability]
+enabled = true

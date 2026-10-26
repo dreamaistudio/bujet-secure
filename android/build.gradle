@@ -24,6 +24,16 @@ allprojects {
     }
 }
 
+if (System.getenv("GRADLE_BUILD_DIR")) {
+    allprojects {
+        layout.buildDirectory.set(file("${System.getenv('GRADLE_BUILD_DIR')}/${project.name}"))
+    }
+} else {
+    subprojects {
+        layout.buildDirectory.set(file("${rootProject.layout.buildDirectory.get().asFile}/${project.name}"))
+    }
+}
+
 task clean(type: Delete) {
     delete rootProject.buildDir
 }

@@ -1,9 +1,11 @@
-import { CheckCircle, CheckCircle2, Clock, Download, Search, Trash2, FileDown, Pencil, Plus } from "lucide-react";
+import { CheckCircle, CheckCircle2, Clock, Download, Search, Trash2, FileDown, Pencil, Plus, AlertCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useBackButtonDismiss } from "../lib/backGuard";
 import { Transaction } from "../types";
 import { cn, formatCurrency, formatDate } from "../lib/utils";
 import { jsPDF } from "jspdf";
 import { exportFile, stringToBase64 } from "../lib/fileExport";
+import { addSinhalaFont, prepareSinhalaForPdf, hasNonLatin, SINHALA_FONT_NAME } from "../lib/sinhalaPdf";
 
 interface TransactionsProps {
   transactions: Transaction[];
@@ -55,9 +57,22 @@ export function Transactions({
     'latest' | 'oldest' | 'income_only' | 'expense_only' | 'highest_income' | 'highest_expense'
   >('latest');
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+
+  // Back cancels a delete confirmation instead of leaving the page.
+  useBackButtonDismiss(confirmingId !== null, () => setConfirmingId(null));
   const [clearedToasts, setClearedToasts] = useState<ClearedToast[]>([]);
   const clearedToastsRef = useRef(clearedToasts);
   clearedToastsRef.current = clearedToasts;
+  const [exportErrorToast, setExportErrorToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (exportErrorToast) {
+      const timer = setTimeout(() => {
+        setExportErrorToast(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [exportErrorToast]);
 
   // Cleanup timers on unmount
   useEffect(() => {
@@ -68,6 +83,7 @@ export function Transactions({
 
   const filteredTxs = useMemo(() => {
     const filtered = transactions.filter((tx) => {
+      if (tx.deleted) return false;
       const matchesFilter = filter === "All" ? true : tx.category === filter;
       const matchesSearch = tx.description.toLowerCase().includes(searchQuery.toLowerCase());
       const typeMatch = 
@@ -150,7 +166,7 @@ export function Transactions({
       });
     } catch (err) {
       console.error("CSV export failed:", err);
-      alert("Failed to export CSV. Please try again.");
+      setExportErrorToast("Failed to export CSV. Please try again.");
     }
   };
 
@@ -167,13 +183,16 @@ export function Transactions({
 
   const handleExportPDF = async () => {
     if (filteredTxs.length === 0) {
-      alert("No transactions to export with current filters.");
+      setExportErrorToast("No transactions to export with current filters.");
       return;
     }
 
     try {
       console.log('PDF Header: Starting generation');
       const doc = new jsPDF();
+      // Sinhala descriptions can only be printed if the PDF carries a font
+      // that has Sinhala letters in it. Fetched here, on the first export.
+      const sinhalaReady = await addSinhalaFont(doc);
       const pageWidth = doc.internal.pageSize.width;
       const pageHeight = doc.internal.pageSize.height;
 
@@ -279,18 +298,39 @@ export function Transactions({
       let y = 103;
       let pageNum = 1;
 
-      const hasNonLatin = (text: string) => /[^\u0000-\u024F]/.test(text);
+      /**
+       * Write one cell of free text, which may be in Sinhala.
+       *
+       * Sinhala letters are wider than Latin ones and vary a lot between
+       * words, so the text is trimmed to the width the column actually has
+       * rather than to a number of characters \u2014 a fixed count either wastes
+       * half the column or spills into the next one.
+       *
+       * If the Sinhala font could not be loaded, the old behaviour is kept:
+       * better an honest note than a row of empty boxes.
+       */
+      const drawTextCell = (text: string, x: number, rowY: number, maxWidth: number) => {
+        const useSinhala = hasNonLatin(text);
 
-      const safeText = (text: string, maxLen: number): string => {
-        if (hasNonLatin(text)) {
-          const safeChars = text.replace(/[^\u0000-\u024F]/g, "").trim();
-          const preview = safeChars.length > 0 ? safeChars.slice(0, 15) + " " : "";
-          return `${preview}[See app for full text]`;
+        if (useSinhala && !sinhalaReady) {
+          const latinOnly = text.replace(/[^\u0000-\u024F]/g, "").trim();
+          const preview = latinOnly.length > 0 ? latinOnly.slice(0, 15) + " " : "";
+          doc.text(`${preview}[See app for full text]`, x, rowY);
+          return;
         }
-        if (text.length > maxLen) {
-          return text.slice(0, maxLen - 3) + "...";
+
+        if (useSinhala) doc.setFont(SINHALA_FONT_NAME, "normal");
+
+        let shown = useSinhala ? prepareSinhalaForPdf(text) : text;
+        if (doc.getTextWidth(shown) > maxWidth) {
+          while (shown.length > 1 && doc.getTextWidth(shown + "...") > maxWidth) {
+            shown = shown.slice(0, -1);
+          }
+          shown += "...";
         }
-        return text;
+        doc.text(shown, x, rowY);
+
+        if (useSinhala) doc.setFont("helvetica", "normal");
       };
 
       filteredTxs.forEach((tx) => {
@@ -309,17 +349,18 @@ export function Transactions({
         const timeStr = tx.time ? ` ${formatTxTime(tx.time)}` : "";
         const dateTimeStr = `${formattedDate}${timeStr}`;
 
-        const shortDesc = safeText(tx.description, 40);
-        const shortCat = tx.category.length > 13 ? tx.category.slice(0, 10) + "..." : tx.category;
-        const amtStr = `${tx.amount < 0 ? "-" : ""}${currency} ${fmtNum(tx.amount)}`;
+        // Currency first, then the sign - the same order the app uses on screen
+        // and the same order the Net Balance line above already uses. It used to
+        // read "-LKR 5,000.00" here while every other place read "LKR -5,000.00".
+        const amtStr = `${currency} ${tx.amount < 0 ? "-" : ""}${fmtNum(tx.amount)}`;
 
         // Row output - reset font size and weight to standard row style (9pt, normal, gray)
         doc.setFontSize(9);
         doc.setFont("helvetica", "normal");
         doc.setTextColor(60, 60, 60);
         doc.text(dateTimeStr, colDate, y);
-        doc.text(shortDesc, colDesc, y);
-        doc.text(shortCat, colCat, y);
+        drawTextCell(tx.description, colDesc, y, colCat - colDesc - 2);
+        drawTextCell(tx.category, colCat, y, colStatus - colCat - 2);
 
         doc.setFontSize(9);  // RESET again before status
         doc.setFontSize(8);  // Set to 8 to print status at smaller font size
@@ -384,12 +425,12 @@ export function Transactions({
       });
     } catch (err) {
       console.error("PDF export failed:", err);
-      alert("Failed to export PDF. Please try again.");
+      setExportErrorToast("Failed to export PDF. Please try again.");
     }
   };
 
   const ledgerTxs = useMemo(() => {
-    return transactions.filter((t) => filter === "All" ? true : t.category === filter);
+    return transactions.filter((t) => !t.deleted && (filter === "All" ? true : t.category === filter));
   }, [transactions, filter]);
 
   const summaryTotals = useMemo(() => {
@@ -439,9 +480,9 @@ export function Transactions({
       {/* TABS NAVIGATION */}
       <div className="flex border-b border-[var(--color-outline)] shrink-0 bg-[var(--color-surface-variant)] rounded-t overflow-hidden">
         {[
-          { key: "All", label: "All", count: transactions.length },
-          { key: "Business", label: `💼 ${businessLedgerName}`, count: transactions.filter(t => t.category === "Business").length },
-          { key: "Personal", label: `👤 ${personalLedgerName}`, count: transactions.filter(t => t.category === "Personal").length }
+          { key: "All", label: "All", count: transactions.filter(t => !t.deleted).length },
+          { key: "Business", label: `💼 ${businessLedgerName}`, count: transactions.filter(t => !t.deleted && t.category === "Business").length },
+          { key: "Personal", label: `👤 ${personalLedgerName}`, count: transactions.filter(t => !t.deleted && t.category === "Personal").length }
         ].map(({ key, label, count }) => {
           const isActive = filter === key;
           return (
@@ -640,7 +681,10 @@ export function Transactions({
                           isIncome ? "text-[var(--color-secondary)]" : "text-[var(--color-error)]"
                         )}
                       >
-                        {amt.value}
+                        {/* fullVal includes the currency prefix. value is the bare
+                            number, which left the amount with no currency on this
+                            list while every other screen showed one. */}
+                        {amt.fullVal}
                       </div>
                     </div>
                   </div>
@@ -729,6 +773,21 @@ export function Transactions({
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Export Error Toast */}
+      {exportErrorToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[300] bg-red-950/90 border border-red-500/40 text-red-200 rounded-lg shadow-2xl px-4 py-2.5 flex items-center gap-2 text-xs font-medium animate-[slideUp_0.2s_ease-out]">
+          <AlertCircle size={16} className="text-red-400 shrink-0" />
+          <span>{exportErrorToast}</span>
+          <button
+            type="button"
+            onClick={() => setExportErrorToast(null)}
+            className="ml-2 text-red-400 hover:text-white cursor-pointer"
+          >
+            ✕
+          </button>
         </div>
       )}
     </div>

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { LoanEntry } from "../types";
 import { cn, formatCurrency, formatDate, generateId, getTodayString } from "../lib/utils";
+import { useBackButtonDismiss } from "../lib/backGuard";
 
 interface LoansProps {
   loans: LoanEntry[];
@@ -29,25 +30,33 @@ export function Loans({ loans, currency, onAddLoan, onDeleteLoan, onMarkPaid }: 
   const [showAddModal, setShowAddModal] = useState(false);
   const [confirmPaidId, setConfirmPaidId] = useState<string | null>(null);
 
+  // Back closes the open dialog instead of leaving the page. Without this the
+  // hardware back button skipped these dialogs entirely, so a half-filled loan
+  // form was discarded and the user was thrown out to the Dashboard.
+  useBackButtonDismiss(showAddModal || confirmPaidId !== null, () => {
+    if (confirmPaidId !== null) setConfirmPaidId(null);
+    else setShowAddModal(false);
+  });
+
   const lentLoans = useMemo(() => {
-    const unpaid = loans.filter((l) => l.type === "lent" && l.status === "unpaid");
-    const paid = loans.filter((l) => l.type === "lent" && l.status === "paid");
+    const unpaid = loans.filter((l) => !l.deleted && l.type === "lent" && l.status === "unpaid");
+    const paid = loans.filter((l) => !l.deleted && l.type === "lent" && l.status === "paid");
     return [...unpaid, ...paid];
   }, [loans]);
 
   const borrowedLoans = useMemo(() => {
-    const unpaid = loans.filter((l) => l.type === "borrowed" && l.status === "unpaid");
-    const paid = loans.filter((l) => l.type === "borrowed" && l.status === "paid");
+    const unpaid = loans.filter((l) => !l.deleted && l.type === "borrowed" && l.status === "unpaid");
+    const paid = loans.filter((l) => !l.deleted && l.type === "borrowed" && l.status === "paid");
     return [...unpaid, ...paid];
   }, [loans]);
 
   const totalLent = useMemo(
-    () => loans.filter((l) => l.type === "lent" && l.status === "unpaid").reduce((s, l) => s + l.amount, 0),
+    () => loans.filter((l) => !l.deleted && l.type === "lent" && l.status === "unpaid").reduce((s, l) => s + l.amount, 0),
     [loans]
   );
 
   const totalBorrowed = useMemo(
-    () => loans.filter((l) => l.type === "borrowed" && l.status === "unpaid").reduce((s, l) => s + l.amount, 0),
+    () => loans.filter((l) => !l.deleted && l.type === "borrowed" && l.status === "unpaid").reduce((s, l) => s + l.amount, 0),
     [loans]
   );
 
@@ -362,10 +371,20 @@ function AddLoanModal({ onClose, onAdd, defaultTab }: AddLoanModalProps) {
   const [reason, setReason] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(getTodayString());
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const validate = () => {
+    const e: Record<string, string> = {};
+    if (!personName.trim()) e.personName = "Person name is required.";
+    const numAmt = parseFloat(amount);
+    if (!amount || isNaN(numAmt) || numAmt <= 0) e.amount = "Enter a valid positive amount.";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!personName.trim() || !amount || parseFloat(amount) <= 0) return;
+    if (!validate()) return;
 
     const loan: LoanEntry = {
       id: generateId(),
@@ -387,9 +406,9 @@ function AddLoanModal({ onClose, onAdd, defaultTab }: AddLoanModalProps) {
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-xl shadow-2xl w-full max-w-md mx-4 animate-[slideUp_0.2s_ease-out]">
+      <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-xl shadow-2xl w-full max-w-md mx-4 animate-[slideUp_0.2s_ease-out] max-h-[85vh] flex flex-col">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-outline)]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-outline)] shrink-0">
           <h2 className="font-bold text-[var(--color-on-surface)] flex items-center gap-2">
             <HandCoins size={20} className="text-[var(--color-primary)]" />
             New Loan Entry
@@ -399,118 +418,128 @@ function AddLoanModal({ onClose, onAdd, defaultTab }: AddLoanModalProps) {
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Type Toggle */}
-          <div>
-            <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-2">
-              Loan Type
-            </label>
-            <div className="grid grid-cols-2 gap-0 border border-[var(--color-outline)] rounded overflow-hidden">
-              <button
-                type="button"
-                onClick={() => setType("lent")}
-                className={cn(
-                  "py-2.5 text-xs font-bold transition-all flex items-center justify-center gap-1.5",
-                  type === "lent"
-                    ? "bg-emerald-900/30 text-emerald-400 border-b-2 border-emerald-400"
-                    : "bg-[var(--color-surface)] text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)]"
-                )}
-              >
-                <ArrowUpRight size={14} />
-                I Lent Money
-              </button>
-              <button
-                type="button"
-                onClick={() => setType("borrowed")}
-                className={cn(
-                  "py-2.5 text-xs font-bold transition-all flex items-center justify-center gap-1.5 border-l border-[var(--color-outline)]",
-                  type === "borrowed"
-                    ? "bg-red-900/20 text-red-400 border-b-2 border-red-400"
-                    : "bg-[var(--color-surface)] text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)]"
-                )}
-              >
-                <ArrowDownLeft size={14} />
-                I Borrowed
-              </button>
+        <form onSubmit={handleSubmit} className="flex flex-col min-h-0 flex-1 overflow-hidden">
+          <div className="p-5 space-y-4 overflow-y-auto max-h-[65vh] sm:max-h-none flex-1">
+            {/* Type Toggle */}
+            <div>
+              <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-2">
+                Loan Type
+              </label>
+              <div className="grid grid-cols-2 gap-0 border border-[var(--color-outline)] rounded overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setType("lent")}
+                  className={cn(
+                    "py-2.5 text-xs font-bold transition-all flex items-center justify-center gap-1.5",
+                    type === "lent"
+                      ? "bg-emerald-900/30 text-emerald-400 border-b-2 border-emerald-400"
+                      : "bg-[var(--color-surface)] text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)]"
+                  )}
+                >
+                  <ArrowUpRight size={14} />
+                  I Lent Money
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setType("borrowed")}
+                  className={cn(
+                    "py-2.5 text-xs font-bold transition-all flex items-center justify-center gap-1.5 border-l border-[var(--color-outline)]",
+                    type === "borrowed"
+                      ? "bg-red-900/20 text-red-400 border-b-2 border-red-400"
+                      : "bg-[var(--color-surface)] text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)]"
+                  )}
+                >
+                  <ArrowDownLeft size={14} />
+                  I Borrowed
+                </button>
+              </div>
             </div>
-          </div>
 
-          {/* Person Name */}
-          <div>
-            <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-              <User size={12} className="inline mr-1 -mt-0.5" />
-              Person Name
-            </label>
-            <input
-              type="text"
-              value={personName}
-              onChange={(e) => setPersonName(e.target.value)}
-              placeholder={type === "lent" ? "Who did you lend to?" : "Who did you borrow from?"}
-              required
-              className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
-            />
-          </div>
-
-          {/* Reason */}
-          <div>
-            <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-              <FileText size={12} className="inline mr-1 -mt-0.5" />
-              Reason
-            </label>
-            <input
-              type="text"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="e.g. Emergency, Business, Personal..."
-              className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
-            />
-          </div>
-
-          {/* Amount + Date row */}
-          <div className="grid grid-cols-2 gap-3">
+            {/* Person Name */}
             <div>
               <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-                Amount
+                <User size={12} className="inline mr-1 -mt-0.5" />
+                Person Name
               </label>
               <input
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="0.00"
-                min="0.01"
-                step="0.01"
-                required
-                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] font-mono placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
+                type="text"
+                value={personName}
+                onChange={(e) => {
+                  setPersonName(e.target.value);
+                  setErrors((prev) => ({ ...prev, personName: "" }));
+                }}
+                placeholder={type === "lent" ? "Who did you lend to?" : "Who did you borrow from?"}
+                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
               />
+              {errors.personName && <p className="text-[var(--color-error)] text-xs mt-1">{errors.personName}</p>}
             </div>
+
+            {/* Reason */}
             <div>
               <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-                <Calendar size={12} className="inline mr-1 -mt-0.5" />
-                Date
+                <FileText size={12} className="inline mr-1 -mt-0.5" />
+                Reason
               </label>
               <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                required
-                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] focus:border-[var(--color-primary)] focus:outline-none transition-colors"
+                type="text"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="e.g. Emergency, Business, Personal..."
+                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
               />
+            </div>
+
+            {/* Amount + Date row */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
+                  Amount
+                </label>
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => {
+                    setAmount(e.target.value);
+                    setErrors((prev) => ({ ...prev, amount: "" }));
+                  }}
+                  placeholder="0.00"
+                  min="0.01"
+                  step="0.01"
+                  className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] font-mono placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
+                />
+                {errors.amount && <p className="text-[var(--color-error)] text-xs mt-1">{errors.amount}</p>}
+              </div>
+              <div>
+                <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
+                  <Calendar size={12} className="inline mr-1 -mt-0.5" />
+                  Date
+                </label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  required
+                  className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] focus:border-[var(--color-primary)] focus:outline-none transition-colors"
+                />
+              </div>
             </div>
           </div>
 
           {/* Submit */}
-          <button
-            type="submit"
-            className={cn(
-              "w-full py-3 rounded font-bold text-sm transition-all flex items-center justify-center gap-2",
-              type === "lent"
-                ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                : "bg-red-600 hover:bg-red-700 text-white"
-            )}
-          >
-            <HandCoins size={16} />
-            {type === "lent" ? "Record Money Lent" : "Record Money Borrowed"}
-          </button>
+          <div className="px-5 pb-5 pt-2 shrink-0">
+            <button
+              type="submit"
+              className={cn(
+                "w-full py-3 rounded font-bold text-sm transition-all flex items-center justify-center gap-2",
+                type === "lent"
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                  : "bg-red-600 hover:bg-red-700 text-white"
+              )}
+            >
+              <HandCoins size={16} />
+              {type === "lent" ? "Record Money Lent" : "Record Money Borrowed"}
+            </button>
+          </div>
         </form>
       </div>
     </div>

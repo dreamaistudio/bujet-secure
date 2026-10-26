@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="si">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relay Check</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --line: #272c37;
+    --ink: #e8eaed; --muted: #9aa3b2; --accent: #3ddc84; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input {
+    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: #0c0e13; color: var(--ink); font: 13px/1.4 ui-monospace, Consolas, monospace;
+  }
+  button {
+    margin-top: 12px; width: 100%; padding: 11px 16px; border: 0; border-radius: 8px;
+    background: var(--accent); color: #06220f; font-weight: 700; font-size: 15px; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  pre {
+    white-space: pre-wrap; word-break: break-word; margin: 0;
+    font: 12px/1.5 ui-monospace, Consolas, monospace; color: var(--ink);
+  }
+  .k { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  .ok { color: var(--accent); } .bad { color: var(--bad); }
+  .note { font-size: 12px; color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Budget Secure — තැපැල් පෙට්ටිය පරීක්ෂාව</h1>
+  <p class="sub">මේ පිටුව ඔයාගේ browser එකේ විතරක් run වෙනවා. Key එක Cloudflare තැපැල් පෙට්ටිය හැර වෙන කොහේවත් යවන්නේ නෑ.</p>
+
+  <div class="card">
+    <label for="url">තැපැල් පෙට්ටියේ address</label>
+    <input id="url" value="https://budget-secure-relay.dreamaistudio.workers.dev">
+    <label for="key" style="margin-top:12px">Pairing key (PC එකේ <code>/api/sync/status</code> එකේ <code>key</code>)</label>
+    <input id="key" placeholder="Vu3TF0OO..." autocomplete="off" spellcheck="false">
+    <button id="go">පරීක්ෂා කරන්න</button>
+    <div class="note">Box id සහ password මේ key එකෙන් මෙතැනදීම හදනවා — app එක කරන විදිහටම.</div>
+  </div>
+
+  <div class="card" id="out" hidden><pre id="log"></pre></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = (html) => { $('out').hidden = false; $('log').innerHTML += html + '\n'; };
+
+function hex(buf) {
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function keyToBytes(text) {
+  let b64 = text.trim().replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4 !== 0) b64 += '=';
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  if (out.length !== 32) throw new Error('Key එක වැරදියි (bytes ' + out.length + ', 32ක් ඕනේ)');
+  return out;
+}
+
+async function derive(keyText, label) {
+  const k = await crypto.subtle.importKey('raw', keyToBytes(keyText), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return hex(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(label)));
+}
+
+async function call(url, auth, boxId, action, query) {
+  const u = new URL(url.replace(/\/+$/, '') + '/v1/box/' + boxId + '/' + action);
+  for (const [k, v] of Object.entries(query || {})) u.searchParams.set(k, v);
+  const res = await fetch(u.toString(), { headers: { authorization: 'Bearer ' + auth } });
+  const text = await res.text();
+  let body; try { body = JSON.parse(text); } catch { body = text; }
+  return { status: res.status, body };
+}
+
+$('go').onclick = async () => {
+  $('log').innerHTML = '';
+  $('out').hidden = false;
+  const url = $('url').value.trim();
+  const key = $('key').value.trim();
+  $('go').disabled = true;
+  try {
+    if (!key) throw new Error('Key එක දාන්න');
+
+    const [boxId, auth] = await Promise.all([
+      derive(key, 'budget-secure-box-id'),
+      derive(key, 'budget-secure-box-auth')
+    ]);
+    log('<span class="k">Box id</span>\n' + boxId + '\n');
+
+    const ping = await fetch(url.replace(/\/+$/, '') + '/v1/ping').then(r => r.json()).catch(e => ({ error: String(e) }));
+    log('<span class="k">ping</span>\n' + JSON.stringify(ping) + '\n');
+
+    const st = await call(url, auth, boxId, 'status');
+    log('<span class="k">status (HTTP ' + st.status + ')</span>\n' + JSON.stringify(st.body, null, 2) + '\n');
+
+    for (const lane of ['toPhone', 'toPc']) {
+      const r = await call(url, auth, boxId, 'pull', { lane, since: 0, limit: 200 });
+      const items = (r.body && r.body.items) || [];
+      const cls = items.length ? 'ok' : 'bad';
+      log('<span class="k">lane ' + lane + ' (HTTP ' + r.status + ')</span>\n<span class="' + cls + '">items: ' + items.length + '</span>'
+        + (items.length ? '   seq: ' + items[0].seq + ' … ' + items[items.length - 1].seq : '')
+        + (r.body && r.body.gap ? '   gap: true' : '') + '\n');
+    }
+
+    log('\n<span class="k">කියවන හැටි</span>\ntoPhone > 0  →  PC එක දානවා, phone එක අරන් නෑ\ntoPc  > 0  →  phone එක දානවා, PC එක අරන් නෑ\nදෙකම 0     →  කිසිවෙක් දාන්නේ නෑ');
+  } catch (err) {
+    log('<span class="bad">' + String(err && err.message || err) + '</span>');
+  } finally {
+    $('go').disabled = false;
+  }
+};
+</script>
+</body>
+</html>

@@ -20,3 +20,5 @@ keystore.properties
 dev-app-update.yml
 electron/dev-app-update.yml
 scratch/
+.idea/
+.wrangler/

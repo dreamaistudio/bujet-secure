@@ -19,8 +19,12 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
 
   return (
     <div 
-      className="fixed inset-0 z-50 bg-black flex items-center justify-center"
+      className="fixed inset-0 z-50 bg-black flex items-center justify-center cursor-pointer"
       style={{ display: visible ? 'flex' : 'none' }}
+      onClick={() => {
+        setVisible(false);
+        onComplete();
+      }}
     >
       <video
         autoPlay

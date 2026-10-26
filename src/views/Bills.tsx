@@ -1,4 +1,5 @@
 import { useState, useMemo, type FormEvent } from "react";
+import { useBackButtonDismiss } from "../lib/backGuard";
 import {
   CalendarCheck,
   Plus,
@@ -31,6 +32,39 @@ function getDaysInMonth(year: number, month: number): number {
   return new Date(year, month, 0).getDate();
 }
 
+/**
+ * When a bill was first written down.
+ *
+ * The bills table has no created-at column, but every id this app makes
+ * begins with the moment of creation written in base 36, so the date can be
+ * read back out of the id itself.
+ *
+ * It deliberately does NOT use `updated_at`. That is the last-CHANGED time:
+ * it moves every time the bill is edited, and again every time the bill
+ * arrives over sync. Reading creation from it would mean a bill that really
+ * is unpaid quietly loses its red warning the moment anyone touches it, or
+ * the moment the phone syncs — exactly the warning this app exists to show.
+ *
+ * Returns null for an id that carries no sensible date. The caller then
+ * treats the bill as long-standing, so a genuinely late bill still shows as
+ * late: of the two ways to be wrong, leaving a warning up is far safer than
+ * hiding one.
+ */
+function getBillCreatedAt(bill: Bill): Date | null {
+  const match = /^[0-9a-z]{8}/.exec(bill.id || "");
+  if (!match) return null;
+
+  const ms = parseInt(match[0], 36);
+  if (!Number.isFinite(ms)) return null;
+
+  // Anything outside a plausible range is some other kind of id, not a date.
+  const EARLIEST = Date.UTC(2020, 0, 1);
+  const LATEST = Date.now() + 24 * 60 * 60 * 1000;
+  if (ms < EARLIEST || ms > LATEST) return null;
+
+  return new Date(ms);
+}
+
 function getBillStatus(
   bill: Bill,
   payment: BillPayment | undefined,
@@ -41,7 +75,32 @@ function getBillStatus(
   if (payment && payment.paid) return "paid";
   const lastDay = getDaysInMonth(currentYear, currentMonth);
   const effectiveDueDay = Math.min(bill.dueDay, lastDay);
-  if (currentDay > effectiveDueDay) return "overdue";
+
+  if (currentDay > effectiveDueDay) {
+    const created = getBillCreatedAt(bill);
+
+    // A bill counts as late only if it was already being tracked when the due
+    // day went past. One added afterwards has not been missed — the user is
+    // simply writing it down for the first time.
+    if (created) {
+      const createdYear = created.getFullYear();
+      const createdMonth = created.getMonth() + 1;
+      const createdDay = created.getDate();
+
+      const addedThisMonthAfterDueDay =
+        createdYear === currentYear &&
+        createdMonth === currentMonth &&
+        createdDay >= effectiveDueDay;
+
+      const addedAfterThisMonth =
+        createdYear > currentYear ||
+        (createdYear === currentYear && createdMonth > currentMonth);
+
+      if (addedThisMonthAfterDueDay || addedAfterThisMonth) return "pending";
+    }
+
+    return "overdue";
+  }
   return "pending";
 }
 
@@ -82,6 +141,16 @@ export function Bills({
   const [confirmUnpayId, setConfirmUnpayId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Back closes the topmost open dialog instead of leaving the page.
+  useBackButtonDismiss(
+    showAddModal || confirmPaidId !== null || confirmUnpayId !== null,
+    () => {
+      if (confirmPaidId !== null) setConfirmPaidId(null);
+      else if (confirmUnpayId !== null) setConfirmUnpayId(null);
+      else setShowAddModal(false);
+    }
+  );
+
   // Current date components — 1-indexed month (Refinement 6)
   const today = new Date();
   const currentYear = today.getFullYear();
@@ -100,39 +169,41 @@ export function Bills({
     return map;
   }, [billPayments, currentMonthStr]);
 
+  const activeBills = useMemo(() => bills.filter((b) => !b.deleted), [bills]);
+
   // Computed stats
   const totalMonthly = useMemo(
-    () => bills.reduce((s, b) => s + b.amount, 0),
-    [bills]
+    () => activeBills.reduce((s, b) => s + b.amount, 0),
+    [activeBills]
   );
 
   const paidCount = useMemo(
     () =>
-      bills.filter((b) => {
+      activeBills.filter((b) => {
         const payment = paymentMap.get(b.id);
         return getBillStatus(b, payment, currentYear, currentMonth, currentDay) === "paid";
       }).length,
-    [bills, paymentMap, currentYear, currentMonth, currentDay]
+    [activeBills, paymentMap, currentYear, currentMonth, currentDay]
   );
 
   const overdueCount = useMemo(
     () =>
-      bills.filter((b) => {
+      activeBills.filter((b) => {
         const payment = paymentMap.get(b.id);
         return getBillStatus(b, payment, currentYear, currentMonth, currentDay) === "overdue";
       }).length,
-    [bills, paymentMap, currentYear, currentMonth, currentDay]
+    [activeBills, paymentMap, currentYear, currentMonth, currentDay]
   );
 
   // Sort: overdue first, then pending, then paid
   const sortedBills = useMemo(() => {
     const order = { overdue: 0, pending: 1, paid: 2 };
-    return [...bills].sort((a, b) => {
+    return [...activeBills].sort((a, b) => {
       const sa = getBillStatus(a, paymentMap.get(a.id), currentYear, currentMonth, currentDay);
       const sb = getBillStatus(b, paymentMap.get(b.id), currentYear, currentMonth, currentDay);
       return order[sa] - order[sb];
     });
-  }, [bills, paymentMap, currentYear, currentMonth, currentDay]);
+  }, [activeBills, paymentMap, currentYear, currentMonth, currentDay]);
 
   const monthLabel = new Date(currentYear, currentMonth - 1).toLocaleString("default", {
     month: "long",
@@ -176,7 +247,7 @@ export function Bills({
             Paid This Month
           </p>
           <p className="font-mono text-base font-bold text-emerald-400 mt-1">
-            {paidCount} / {bills.length}
+            {paidCount} / {activeBills.length}
           </p>
         </div>
         <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-lg px-4 py-3">
@@ -441,17 +512,9 @@ export function Bills({
               No payments recorded yet for this month.
             </div>
           ) : (
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="bg-[var(--color-surface-variant)]/50 border-b border-[var(--color-outline)] text-[10px] font-bold uppercase tracking-wider text-[var(--color-on-surface-variant)]">
-                  <th className="px-4 py-2">Bill Name</th>
-                  <th className="px-4 py-2">Date Paid</th>
-                  <th className="px-4 py-2 text-right">Amount</th>
-                  <th className="px-4 py-2 text-center">Ledger</th>
-                  <th className="px-4 py-2 text-center">Transaction</th>
-                </tr>
-              </thead>
-              <tbody>
+            <>
+              {/* Mobile Card List */}
+              <div className="md:hidden p-3 space-y-2.5">
                 {billPayments
                   .filter(bp => bp.month === currentMonthStr && !bp.deleted)
                   .map(bp => {
@@ -461,27 +524,85 @@ export function Bills({
                     const billAmount = bill ? bill.amount : 0;
 
                     return (
-                      <tr key={bp.id} className="border-b border-[var(--color-surface-variant)] hover:bg-[var(--color-surface-variant)]/50">
-                        <td className="px-4 py-2 font-medium text-[var(--color-on-surface)]">{billName}</td>
-                        <td className="px-4 py-2 font-mono text-[var(--color-on-surface-variant)]">{bp.paid_date}</td>
-                        <td className="px-4 py-2 font-mono text-right text-emerald-400 font-semibold">
-                          {bill ? formatCurrency(-billAmount, currency).fullVal : "—"}
-                        </td>
-                        <td className="px-4 py-2 text-center">
-                          {billCategory === "Business" ? (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Biz</span>
-                          ) : (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">Pers</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2 text-center text-[10px] text-[var(--color-on-surface-variant)] font-mono">
-                          {bp.linked_transaction_id ? "Linked" : "No"}
-                        </td>
-                      </tr>
+                      <div
+                        key={bp.id}
+                        className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-lg p-3 flex flex-col gap-2"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold text-[var(--color-on-surface)] truncate">
+                              {billName}
+                            </div>
+                            <div className="text-[11px] font-mono text-[var(--color-on-surface-variant)] mt-0.5">
+                              {bp.paid_date}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="font-mono text-xs font-bold text-emerald-400">
+                              {bill ? formatCurrency(-billAmount, currency).fullVal : "—"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between pt-1.5 border-t border-[var(--color-outline)]/50 text-[10px]">
+                          <div>
+                            {billCategory === "Business" ? (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Biz</span>
+                            ) : (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">Pers</span>
+                            )}
+                          </div>
+                          <div className="font-mono text-[10px] text-[var(--color-on-surface-variant)]">
+                            {bp.linked_transaction_id ? "Linked" : "No"}
+                          </div>
+                        </div>
+                      </div>
                     );
                   })}
-              </tbody>
-            </table>
+              </div>
+
+              {/* Desktop Table */}
+              <table className="hidden md:table w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-[var(--color-surface-variant)]/50 border-b border-[var(--color-outline)] text-[10px] font-bold uppercase tracking-wider text-[var(--color-on-surface-variant)]">
+                    <th className="px-4 py-2">Bill Name</th>
+                    <th className="px-4 py-2">Date Paid</th>
+                    <th className="px-4 py-2 text-right">Amount</th>
+                    <th className="px-4 py-2 text-center">Ledger</th>
+                    <th className="px-4 py-2 text-center">Transaction</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {billPayments
+                    .filter(bp => bp.month === currentMonthStr && !bp.deleted)
+                    .map(bp => {
+                      const bill = bills.find(b => b.id === bp.bill_id);
+                      const billName = bill ? bill.name : "Deleted Bill";
+                      const billCategory = bill ? bill.category : "Personal";
+                      const billAmount = bill ? bill.amount : 0;
+
+                      return (
+                        <tr key={bp.id} className="border-b border-[var(--color-surface-variant)] hover:bg-[var(--color-surface-variant)]/50">
+                          <td className="px-4 py-2 font-medium text-[var(--color-on-surface)]">{billName}</td>
+                          <td className="px-4 py-2 font-mono text-[var(--color-on-surface-variant)]">{bp.paid_date}</td>
+                          <td className="px-4 py-2 font-mono text-right text-emerald-400 font-semibold">
+                            {bill ? formatCurrency(-billAmount, currency).fullVal : "—"}
+                          </td>
+                          <td className="px-4 py-2 text-center">
+                            {billCategory === "Business" ? (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Biz</span>
+                            ) : (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">Pers</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2 text-center text-[10px] text-[var(--color-on-surface-variant)] font-mono">
+                            {bp.linked_transaction_id ? "Linked" : "No"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </>
           )}
         </div>
       </div>
@@ -538,12 +659,25 @@ function AddBillModal({ onClose, onAdd }: AddBillModalProps) {
   const [dueDay, setDueDay] = useState("1");
   const [category, setCategory] = useState<LedgerType>("Personal");
   const [notes, setNotes] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const validate = () => {
+    const e: Record<string, string> = {};
+    if (!name.trim()) e.name = "Bill name is required.";
+    const numAmt = parseFloat(amount);
+    if (!amount || isNaN(numAmt) || numAmt <= 0) e.amount = "Enter a valid positive amount.";
+    const dueDayNum = parseInt(dueDay, 10);
+    if (!dueDay || isNaN(dueDayNum) || dueDayNum < 1 || dueDayNum > 31) {
+      e.dueDay = "Day must be 1 to 31.";
+    }
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !amount || parseFloat(amount) <= 0) return;
-    const dueDayNum = parseInt(dueDay);
-    if (isNaN(dueDayNum) || dueDayNum < 1 || dueDayNum > 31) return;
+    if (!validate()) return;
+    const dueDayNum = parseInt(dueDay, 10);
 
     const bill: Bill = {
       id: generateId(),
@@ -564,9 +698,9 @@ function AddBillModal({ onClose, onAdd }: AddBillModalProps) {
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-xl shadow-2xl w-full max-w-md mx-4 animate-[slideUp_0.2s_ease-out]">
+      <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-xl shadow-2xl w-full max-w-md mx-4 animate-[slideUp_0.2s_ease-out] max-h-[85vh] flex flex-col">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-outline)]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-outline)] shrink-0">
           <h2 className="font-bold text-[var(--color-on-surface)] flex items-center gap-2">
             <CalendarCheck size={20} className="text-[var(--color-primary)]" />
             New Recurring Bill
@@ -579,95 +713,108 @@ function AddBillModal({ onClose, onAdd }: AddBillModalProps) {
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Bill Name */}
-          <div>
-            <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-              <FileText size={12} className="inline mr-1 -mt-0.5" />
-              Bill Name
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Rent, WiFi, Netflix..."
-              required
-              className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
-            />
-          </div>
-
-          {/* Amount + Due Day row */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-                Monthly Amount
-              </label>
-              <input
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="0.00"
-                min="0.01"
-                step="0.01"
-                required
-                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] font-mono placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
-              />
-            </div>
-            <div>
-              <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-                <Calendar size={12} className="inline mr-1 -mt-0.5" />
-                Due Day (1–31)
-              </label>
-              <input
-                type="number"
-                value={dueDay}
-                onChange={(e) => setDueDay(e.target.value)}
-                min="1"
-                max="31"
-                required
-                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] font-mono focus:border-[var(--color-primary)] focus:outline-none transition-colors"
-              />
-            </div>
-          </div>
-
-          {/* Category + Notes row */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
-                Ledger
-              </label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value as LedgerType)}
-                className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] font-mono focus:border-[var(--color-primary)] focus:outline-none transition-colors"
-              >
-                <option value="Personal">Personal</option>
-                <option value="Business">Business</option>
-              </select>
-            </div>
+        <form onSubmit={handleSubmit} className="flex flex-col min-h-0 flex-1 overflow-hidden">
+          <div className="p-5 space-y-4 overflow-y-auto max-h-[65vh] sm:max-h-none flex-1">
+            {/* Bill Name */}
             <div>
               <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
                 <FileText size={12} className="inline mr-1 -mt-0.5" />
-                Notes
+                Bill Name
               </label>
               <input
                 type="text"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Optional..."
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setErrors((prev) => ({ ...prev, name: "" }));
+                }}
+                placeholder="e.g. Rent, WiFi, Netflix..."
                 className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
               />
+              {errors.name && <p className="text-[var(--color-error)] text-xs mt-1">{errors.name}</p>}
+            </div>
+
+            {/* Amount + Due Day row */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
+                  Monthly Amount
+                </label>
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => {
+                    setAmount(e.target.value);
+                    setErrors((prev) => ({ ...prev, amount: "" }));
+                  }}
+                  placeholder="0.00"
+                  min="0.01"
+                  step="0.01"
+                  className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] font-mono placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
+                />
+                {errors.amount && <p className="text-[var(--color-error)] text-xs mt-1">{errors.amount}</p>}
+              </div>
+              <div>
+                <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
+                  <Calendar size={12} className="inline mr-1 -mt-0.5" />
+                  Due Day (1–31)
+                </label>
+                <input
+                  type="number"
+                  value={dueDay}
+                  onChange={(e) => {
+                    setDueDay(e.target.value);
+                    setErrors((prev) => ({ ...prev, dueDay: "" }));
+                  }}
+                  min="1"
+                  max="31"
+                  className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] font-mono focus:border-[var(--color-primary)] focus:outline-none transition-colors"
+                />
+                {errors.dueDay && <p className="text-[var(--color-error)] text-xs mt-1">{errors.dueDay}</p>}
+              </div>
+            </div>
+
+            {/* Category + Notes row */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
+                  Ledger
+                </label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value as LedgerType)}
+                  className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] font-mono focus:border-[var(--color-primary)] focus:outline-none transition-colors"
+                >
+                  <option value="Personal">Personal</option>
+                  <option value="Business">Business</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">
+                  <FileText size={12} className="inline mr-1 -mt-0.5" />
+                  Notes
+                </label>
+                <input
+                  type="text"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="Optional..."
+                  className="w-full px-3 py-2.5 bg-[var(--color-surface)] border border-[var(--color-outline)] rounded text-sm text-[var(--color-on-surface)] placeholder:text-[var(--color-on-surface-variant)]/50 focus:border-[var(--color-primary)] focus:outline-none transition-colors"
+                />
+              </div>
             </div>
           </div>
 
           {/* Submit */}
-          <button
-            type="submit"
-            className="w-full py-3 rounded font-bold text-sm transition-all flex items-center justify-center gap-2 bg-[var(--color-primary)] hover:bg-[var(--color-secondary-variant)] text-white"
-          >
-            <CalendarCheck size={16} />
-            Add Recurring Bill
-          </button>
+          <div className="px-5 pb-5 pt-2 shrink-0">
+            <button
+              type="submit"
+              className="w-full py-3 rounded font-bold text-sm transition-all flex items-center justify-center gap-2 bg-[var(--color-primary)] hover:bg-[var(--color-secondary-variant)] text-white"
+            >
+              <CalendarCheck size={16} />
+              Add Recurring Bill
+            </button>
+          </div>
         </form>
       </div>
     </div>
@@ -775,15 +922,9 @@ function ConfirmUnpayDialog({ onClose, onConfirm, hasLinkedTransaction }: Confir
 
           {hasLinkedTransaction && (
             <div className="bg-amber-500/5 border border-amber-500/20 rounded p-3">
-              <p className="text-xs text-amber-300 font-medium mb-1">⚠ Warning</p>
+              <p className="text-xs text-amber-300 font-medium mb-1">ℹ Linked Transaction</p>
               <p className="text-xs text-[var(--color-on-surface-variant)]">
-                The transaction created when you originally marked this bill as paid will NOT be
-                deleted automatically.
-              </p>
-              <p className="text-[10px] text-[var(--color-on-surface-variant)] mt-1.5 opacity-70">
-                If you mark this bill as paid again later, a second transaction may be created. To
-                avoid duplicates, remove the original transaction manually from the Transactions page
-                first.
+                The transaction linked to this bill payment will also be automatically removed from your ledger to keep your balance accurate.
               </p>
             </div>
           )}

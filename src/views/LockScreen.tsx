@@ -1,5 +1,6 @@
 import { GripHorizontal, Lock, Terminal, ShieldAlert, AlertTriangle } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, FormEvent } from "react";
+import bcrypt from "bcryptjs";
 import { cn } from "../lib/utils";
 import { STORAGE_KEYS } from "../data";
 
@@ -44,7 +45,6 @@ export function LockScreen({ onUnlock, authPin }: LockScreenProps) {
   const [lockedUntil, setLockedUntil] = useState(() => getLockoutState().lockedUntil);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
-  const hasSecuritySetup = Boolean(authPin && authPin.length > 0);
   const isLockedOut = lockedUntil > Date.now();
 
   // Load lockout state on mount and immediately clear if expired
@@ -92,7 +92,18 @@ export function LockScreen({ onUnlock, authPin }: LockScreenProps) {
         const newPin = pin + val;
         setPin(newPin);
         if (newPin.length === 4) {
-          if (newPin === authPin) {
+          let isValid = false;
+          if (authPin && (authPin.startsWith('$2a$') || authPin.startsWith('$2b$'))) {
+            try {
+              isValid = bcrypt.compareSync(newPin, authPin);
+            } catch {
+              isValid = false;
+            }
+          } else {
+            isValid = (newPin === authPin);
+          }
+
+          if (isValid) {
             // Success
             clearLockoutState();
             setTimeout(onUnlock, 200);
@@ -122,33 +133,33 @@ export function LockScreen({ onUnlock, authPin }: LockScreenProps) {
     [pin, authPin, failedAttempts, isLockedOut, onUnlock]
   );
 
+  // Physical/Virtual keyboard input listener (digits 0-9, Backspace)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isLockedOut) return;
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) {
+        return;
+      }
+
+      if (e.key >= "0" && e.key <= "9") {
+        e.preventDefault();
+        handlePinEntry(e.key);
+      } else if (e.key === "Backspace") {
+        e.preventDefault();
+        handlePinEntry("back");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handlePinEntry, isLockedOut]);
+
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   };
-
-  if (!hasSecuritySetup) {
-    return (
-      <div className="min-h-screen flex flex-col bg-[var(--color-background)] items-center justify-center relative select-none">
-        <div className="w-full max-w-[520px] bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded flex flex-col overflow-hidden relative z-10 p-8 text-center shadow-none">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded bg-[var(--color-surface-lowest)] border border-[var(--color-outline)] mx-auto shadow-inner relative mb-6">
-            <ShieldAlert className="text-[var(--color-on-surface-variant)]" size={40} />
-          </div>
-          <h1 className="text-2xl font-bold text-[var(--color-on-surface)] mb-2">No Security Configured</h1>
-          <p className="text-sm text-[var(--color-on-surface-variant)] mb-8">
-            Please navigate to Settings after signing in to configure a secure unlocking PIN.
-          </p>
-          <button
-            onClick={onUnlock}
-            className="w-full h-12 bg-[var(--color-secondary)] text-[var(--color-on-secondary)] text-sm font-bold rounded border border-transparent hover:opacity-80 transition-colors flex items-center justify-center gap-2"
-          >
-            SIGN IN
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   const remainingAttempts = Math.max(0, MAX_ATTEMPTS - failedAttempts);
 

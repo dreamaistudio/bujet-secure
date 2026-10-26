@@ -1,10 +1,9 @@
 import { 
   Building2, 
   CalendarCheck,
-  CircleHelp,
   HandCoins,
   LayoutDashboard, 
-  LogOut, 
+  Lock, 
   PiggyBank,
   ReceiptText, 
   Settings, 
@@ -18,10 +17,10 @@ interface SidebarProps {
   businessName: string;
   isOpen: boolean;
   onClose: () => void;
-  onSupportClick: () => void;
+  currency?: string;
 }
 
-export function Sidebar({ currentView, onNavigate, businessName, isOpen, onClose, onSupportClick }: SidebarProps) {
+export function Sidebar({ currentView, onNavigate, businessName, isOpen, onClose, currency }: SidebarProps) {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'transactions', label: 'Transactions', icon: ReceiptText },
@@ -54,7 +53,7 @@ export function Sidebar({ currentView, onNavigate, businessName, isOpen, onClose
           <h1 className="font-bold text-lg text-[var(--color-on-surface)] uppercase tracking-wider">
             {businessName}
           </h1>
-          <p className="text-xs text-[var(--color-on-surface-variant)] mt-1 font-medium">LKR Portfolio</p>
+          <p className="text-xs text-[var(--color-on-surface-variant)] mt-1 font-medium">{currency || "LKR"} Portfolio</p>
         </div>
       </div>
 
@@ -62,6 +61,7 @@ export function Sidebar({ currentView, onNavigate, businessName, isOpen, onClose
         <ul className="space-y-1 px-2">
           {navItems.map((item) => {
             const isActive = currentView === item.id;
+            const isComingSoon = item.id === 'business' || item.id === 'personal';
             const Icon = item.icon;
             return (
               <li key={item.id}>
@@ -72,12 +72,16 @@ export function Sidebar({ currentView, onNavigate, businessName, isOpen, onClose
                   }}
                   className={cn(
                     "w-full flex items-center gap-3.5 px-4 py-3 min-h-[46px] rounded text-sm font-medium transition-colors cursor-pointer text-left",
-                    isActive 
-                      ? "text-[var(--color-secondary)] bg-[var(--color-surface-variant)] border-l-3 border-[var(--color-secondary)] font-semibold" 
-                      : "text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)] hover:text-[var(--color-on-surface)] border-l-3 border-transparent"
+                    isComingSoon
+                      ? (isActive
+                          ? "text-zinc-500 bg-[var(--color-surface-variant)] border-l-3 border-zinc-500 font-semibold"
+                          : "text-zinc-500 hover:bg-[var(--color-surface-variant)] hover:text-zinc-400 border-l-3 border-transparent")
+                      : (isActive 
+                          ? "text-[var(--color-secondary)] bg-[var(--color-surface-variant)] border-l-3 border-[var(--color-secondary)] font-semibold" 
+                          : "text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)] hover:text-[var(--color-on-surface)] border-l-3 border-transparent")
                   )}
                 >
-                  <Icon size={20} className={isActive ? "text-[var(--color-secondary)]" : ""} />
+                  <Icon size={20} className={isActive ? (isComingSoon ? "text-zinc-500" : "text-[var(--color-secondary)]") : ""} />
                   <span className="truncate">{item.label}</span>
                 </button>
               </li>
@@ -91,25 +95,13 @@ export function Sidebar({ currentView, onNavigate, businessName, isOpen, onClose
           <li>
             <button 
               onClick={() => {
-                onSupportClick();
-                onClose();
-              }}
-              className="w-full flex items-center gap-3.5 px-4 py-3 min-h-[46px] rounded text-sm font-medium text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)] hover:text-[var(--color-on-surface)] transition-colors cursor-pointer text-left"
-            >
-              <CircleHelp size={20} />
-              <span>Support</span>
-            </button>
-          </li>
-          <li>
-            <button 
-              onClick={() => {
                 onNavigate('lock');
                 onClose();
               }}
               className="w-full flex items-center gap-3.5 px-4 py-3 min-h-[46px] rounded text-sm font-medium text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-variant)] hover:text-[var(--color-on-surface)] transition-colors cursor-pointer text-left"
             >
-              <LogOut size={20} />
-              <span>Sign Out</span>
+              <Lock size={20} />
+              <span>Lock App</span>
             </button>
           </li>
         </ul>

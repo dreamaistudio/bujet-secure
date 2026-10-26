@@ -15,6 +15,7 @@
   --color-outline-variant: #52525b;
   
   --color-primary: #22c55e;
+  --color-primary-variant: #15803d;
   --color-on-primary: #ffffff;
   
   --color-secondary: #22c55e;
@@ -28,11 +29,94 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+:root {
+  color-scheme: dark;
+  --color-primary-variant: #15803d;
+}
+
+/* ---------------------------------------------------------------------------
+   Plain-colour fallbacks for Tailwind's own palette.
+
+   Tailwind writes its built-in colours (emerald, red, amber, blue, zinc, ...)
+   in the newer oklch() notation. A browser that does not understand oklch()
+   throws those lines away, the variable ends up undefined, and anything using
+   it loses its colour with no error - a green button simply renders with no
+   background. Older Android phones ship exactly such a browser.
+
+   Every value below is the same colour, written the old way, worked out from
+   the oklch values Tailwind generates. Newer phones look identical; older ones
+   finally get the colour. Our own colours above were already plain hex and
+   were never affected.
+
+   These sit outside @layer on purpose, so they win over Tailwind's own
+   definitions. Regenerate them if the Tailwind version changes.
+   --------------------------------------------------------------------------- */
+:root {
+  --color-amber-100: #fef3c6;
+  --color-amber-200: #fee685;
+  --color-amber-300: #ffd230;
+  --color-amber-400: #ffb900;
+  --color-amber-500: #fe9a00;
+  --color-amber-600: #e17100;
+  --color-amber-700: #bb4d00;
+  --color-amber-950: #461901;
+  --color-blue-400: #51a2ff;
+  --color-blue-500: #2b7fff;
+  --color-blue-600: #155dfc;
+  --color-blue-700: #1447e6;
+  --color-blue-900: #1c398e;
+  --color-emerald-200: #a4f4cf;
+  --color-emerald-300: #5ee9b5;
+  --color-emerald-400: #00d492;
+  --color-emerald-500: #00bc7d;
+  --color-emerald-600: #009966;
+  --color-emerald-700: #007a55;
+  --color-emerald-900: #004f3b;
+  --color-emerald-950: #002c22;
+  --color-gray-400: #99a1af;
+  --color-gray-800: #1e2939;
+  --color-green-900: #0d542b;
+  --color-red-200: #ffc9c9;
+  --color-red-300: #ffa2a2;
+  --color-red-400: #ff6467;
+  --color-red-500: #fb2c36;
+  --color-red-600: #e7000b;
+  --color-red-700: #c10007;
+  --color-red-900: #82181a;
+  --color-red-950: #460809;
+  --color-rose-100: #ffe4e6;
+  --color-rose-200: #ffccd3;
+  --color-rose-300: #ffa1ad;
+  --color-rose-500: #ff2056;
+  --color-rose-600: #ec003f;
+  --color-rose-900: #8b0836;
+  --color-sky-400: #00bcff;
+  --color-sky-500: #00a6f4;
+  --color-zinc-200: #e4e4e7;
+  --color-zinc-300: #d4d4d8;
+  --color-zinc-400: #9f9fa9;
+  --color-zinc-500: #71717b;
+  --color-zinc-600: #52525c;
+  --color-zinc-700: #3f3f46;
+  --color-zinc-800: #27272a;
+  --color-zinc-900: #18181b;
+}
+
 @layer base {
   body {
     background-color: var(--color-background);
     color: var(--color-on-background);
     @apply font-sans antialiased;
+  }
+
+  select option {
+    background-color: #18181b;
+    color: #fafafa;
+  }
+
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: invert(0.8);
+    cursor: pointer;
   }
 
   /* Strict Scrollbar for Windows feel */
@@ -84,4 +168,31 @@
 }
 .pulse-action {
   animation: gentle-pulse 2s infinite;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* QR scanner: the camera picture is drawn BEHIND the app, so while scanning
+   everything except the scanner overlay must be invisible and see-through.
+   visibility:hidden hides every opaque app background; the overlay
+   (.barcode-scanner-modal) opts back in with visibility:visible. */
+html.barcode-scanner-active {
+  background: transparent !important;
+  color-scheme: normal;
+}
+
+body.barcode-scanner-active {
+  background: transparent !important;
+  visibility: hidden;
+}
+
+body.barcode-scanner-active #root {
+  background: transparent !important;
+}
+
+body.barcode-scanner-active .barcode-scanner-modal {
+  visibility: visible;
 }

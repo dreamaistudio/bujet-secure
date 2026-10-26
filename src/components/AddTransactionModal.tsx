@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Transaction, LedgerType } from "../types";
 import { cn, generateId, getTodayString } from "../lib/utils";
 
@@ -84,8 +84,40 @@ export function AddTransactionModal({ onClose, onAdd, onEdit, editingTransaction
     onClose();
   };
 
+  const firstInputRef = useRef<HTMLInputElement>(null);
+  const handleSubmitRef = useRef(handleSubmit);
+  handleSubmitRef.current = handleSubmit;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    firstInputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCloseRef.current();
+      } else if (e.key === "Enter") {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === "TEXTAREA" || target.isContentEditable)) {
+          return;
+        }
+        e.preventDefault();
+        handleSubmitRef.current();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#09090b]/80 backdrop-blur-sm">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-[#09090b]/80 backdrop-blur-sm"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
       <div className="w-full max-w-lg bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded-lg overflow-hidden shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-[var(--color-outline)] bg-[var(--color-surface)]">
@@ -137,6 +169,8 @@ export function AddTransactionModal({ onClose, onAdd, onEdit, editingTransaction
           <div>
             <label className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase block mb-1.5">Amount</label>
             <input
+              ref={firstInputRef}
+              autoFocus
               type="number"
               min="0"
               step="0.01"

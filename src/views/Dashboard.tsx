@@ -2,7 +2,7 @@ import { Building2, Clock, HandCoins, Info, PiggyBank, Plus, User } from "lucide
 import { useMemo, useState } from "react";
 import { Line, LineChart, ReferenceLine, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
 import { LoanEntry, SavingsEntry, Transaction } from "../types";
-import { cn, formatCurrency, formatDate } from "../lib/utils";
+import { cn, formatCurrency, formatCompactCurrency, formatDate } from "../lib/utils";
 
 interface DashboardProps {
   transactions: Transaction[];
@@ -41,6 +41,35 @@ const formatTxTime = (timeStr?: string) => {
   const ampm = hours >= 12 ? "PM" : "AM";
   const displayHours = hours % 12 || 12;
   return `${String(displayHours).padStart(2, "0")}:${minutes} ${ampm}`;
+};
+
+const formatYAxisTick = (val: number): string => {
+  if (val === 0) return "0";
+  const abs = Math.abs(val);
+  const sign = val < 0 ? "-" : "";
+  if (abs >= 1_000_000) {
+    const formatted = (abs / 1_000_000).toFixed(1).replace(/\.0$/, "");
+    return `${sign}${formatted}M`;
+  }
+  if (abs >= 1_000) {
+    const formatted = (abs / 1_000).toFixed(1).replace(/\.0$/, "");
+    return `${sign}${formatted}K`;
+  }
+  return `${sign}${abs}`;
+};
+
+const formatXAxisTick = (dateStr: string): string => {
+  if (!dateStr) return "";
+  const parts = dateStr.split("-");
+  if (parts.length === 3) {
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const m = parseInt(parts[1], 10);
+    const d = parseInt(parts[2], 10);
+    if (m >= 1 && m <= 12) {
+      return `${monthNames[m - 1]} ${d}`;
+    }
+  }
+  return dateStr;
 };
 
 const ChartTooltip = ({ active, payload }: any) => {
@@ -162,8 +191,8 @@ export function Dashboard({
   const [businessPeriod, setBusinessPeriod] = useState<TimePeriod>("ALL");
   const [personalPeriod, setPersonalPeriod] = useState<TimePeriod>("ALL");
 
-  const bTxs = useMemo(() => transactions.filter((t) => t.category === "Business"), [transactions]);
-  const pTxs = useMemo(() => transactions.filter((t) => t.category === "Personal"), [transactions]);
+  const bTxs = useMemo(() => transactions.filter((t) => !t.deleted && t.category === "Business"), [transactions]);
+  const pTxs = useMemo(() => transactions.filter((t) => !t.deleted && t.category === "Personal"), [transactions]);
 
   const businessSummary = useMemo(() => computeSummary(bTxs), [bTxs]);
   const personalSummary = useMemo(() => computeSummary(pTxs), [pTxs]);
@@ -200,9 +229,14 @@ export function Dashboard({
     filteredTxs: Transaction[]
   ) => {
     const Icon = type === "Business" ? Building2 : User;
-    const filteredNetBalance = chartData.length > 1 
+    const filteredNetBalance = chartData.length > 1
       ? chartData[chartData.length - 1].value - chartData[0].value
       : summary.netBalance;
+
+    // computeChartData hands back two bare {value:0} points when nothing has
+    // cleared yet, while a real series always opens with a point carrying a
+    // description. That is what tells the two apart here.
+    const chartIsEmpty = !(chartData[0] as any)?.description;
 
     return (
       <div className="bg-[var(--color-surface-variant)] border border-[var(--color-outline)] rounded flex flex-col">
@@ -220,23 +254,38 @@ export function Dashboard({
         <div className="p-3.5 sm:p-4 flex flex-col gap-4 sm:gap-6">
           {/* Key Stats */}
           <div className="flex flex-col gap-2 shrink-0">
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-3 gap-2 sm:gap-4">
               <div className="bg-[var(--color-surface)] border border-[var(--color-outline)] p-3 rounded min-w-0">
-                <p className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase mb-1 truncate">TOTAL INCOME</p>
-                <p className="font-mono text-[11px] sm:text-[13px] text-[var(--color-secondary)] truncate" title={formatCurrency(summary.totalIncome, currency).fullVal}>
-                  {formatCurrency(summary.totalIncome, currency).fullVal}
+                {/* Phone uses a shorter label and tighter letter-spacing: with three tiles
+                    across a phone screen the full wording did not fit and was cut off
+                    ("TOTAL INCO..."). Desktop keeps the original label exactly as before. */}
+                <p className="text-[10px] font-bold tracking-normal sm:tracking-wider text-[var(--color-on-surface-variant)] uppercase mb-1 truncate">
+                  <span className="sm:hidden">INCOME</span>
+                  <span className="hidden sm:inline">TOTAL INCOME</span>
+                </p>
+                <p className="font-mono text-[12px] sm:text-[13px] text-[var(--color-secondary)] truncate leading-tight" title={formatCurrency(summary.totalIncome, currency).fullVal}>
+                  <span className="sm:hidden">{formatCompactCurrency(summary.totalIncome, currency)}</span>
+                  <span className="hidden sm:inline">{formatCurrency(summary.totalIncome, currency).fullVal}</span>
                 </p>
               </div>
               <div className="bg-[var(--color-surface)] border border-[var(--color-outline)] p-3 rounded min-w-0">
-                <p className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase mb-1 truncate">TOTAL EXPENSES</p>
-                <p className="font-mono text-[11px] sm:text-[13px] text-[var(--color-error)] truncate" title={formatCurrency(summary.totalExpenses * -1, currency).fullVal}>
-                  {formatCurrency(summary.totalExpenses * -1, currency).fullVal}
+                <p className="text-[10px] font-bold tracking-normal sm:tracking-wider text-[var(--color-on-surface-variant)] uppercase mb-1 truncate">
+                  <span className="sm:hidden">EXPENSES</span>
+                  <span className="hidden sm:inline">TOTAL EXPENSES</span>
+                </p>
+                <p className="font-mono text-[12px] sm:text-[13px] text-[var(--color-error)] truncate leading-tight" title={formatCurrency(summary.totalExpenses * -1, currency).fullVal}>
+                  <span className="sm:hidden">{formatCompactCurrency(summary.totalExpenses * -1, currency)}</span>
+                  <span className="hidden sm:inline">{formatCurrency(summary.totalExpenses * -1, currency).fullVal}</span>
                 </p>
               </div>
               <div className="bg-[var(--color-surface)] border border-[var(--color-outline)] p-3 rounded min-w-0">
-                <p className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase mb-1 truncate">ACTUAL BALANCE</p>
-                <p className="font-mono text-[11px] sm:text-[13px] text-[var(--color-on-surface)] truncate" title={formatCurrency(summary.actualBalance, currency).fullVal}>
-                  {formatCurrency(summary.actualBalance, currency).fullVal}
+                <p className="text-[10px] font-bold tracking-normal sm:tracking-wider text-[var(--color-on-surface-variant)] uppercase mb-1 truncate">
+                  <span className="sm:hidden">BALANCE</span>
+                  <span className="hidden sm:inline">ACTUAL BALANCE</span>
+                </p>
+                <p className="font-mono text-[12px] sm:text-[13px] text-[var(--color-on-surface)] truncate leading-tight" title={formatCurrency(summary.actualBalance, currency).fullVal}>
+                  <span className="sm:hidden">{formatCompactCurrency(summary.actualBalance, currency)}</span>
+                  <span className="hidden sm:inline">{formatCurrency(summary.actualBalance, currency).fullVal}</span>
                 </p>
                 <p className="text-[9px] text-[var(--color-on-surface-variant)] mt-0.5 truncate">Cleared only</p>
               </div>
@@ -308,12 +357,28 @@ export function Dashboard({
               </div>
             )}
 
+            {/* Pulled left into the card's own padding so the numbers down the
+                side sit near the left edge instead of floating inwards. Only the
+                whole chart shifts: the axis band stays 46px wide and the chart
+                margin stays at 0, which is what keeps a long number such as
+                944.5K from being clipped the way it once was. */}
             <div className="flex-1 mt-2 relative z-10 w-full h-full -ml-[10px]">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
-                  <XAxis hide />
+                <LineChart data={chartData} margin={{ top: 8, right: 10, left: 0, bottom: 0 }}>
+                  <XAxis 
+                    dataKey="date" 
+                    tickFormatter={formatXAxisTick} 
+                    tick={{ fontSize: 9, fill: 'var(--color-on-surface-variant)' }} 
+                    tickLine={false} 
+                    axisLine={{ stroke: 'var(--color-outline)' }} 
+                    minTickGap={25} 
+                  />
                   <YAxis 
-                    hide 
+                    tickFormatter={formatYAxisTick}
+                    tick={{ fontSize: 9, fill: 'var(--color-on-surface-variant)' }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={46}
                     domain={([dataMin, dataMax]) => {
                       const min = Math.min(dataMin, 0);
                       const max = Math.max(dataMax, 0);
@@ -321,10 +386,19 @@ export function Dashboard({
                       return [min - padding, max + padding];
                     }} 
                   />
-                  <ReferenceLine y={0} stroke="#444" strokeDasharray="3 3" />
+                  {/* With nothing cleared yet the running balance is zero, so the
+                      trend line simply rests flat on the zero mark. It is drawn
+                      here rather than left to the data line, which spans only the
+                      gap between its own two points and so does not reach across
+                      the chart. The moment there are transactions this goes away
+                      and that same line is the one that climbs or falls - there is
+                      no second line left sitting at zero. */}
+                  {chartIsEmpty && (
+                    <ReferenceLine y={0} stroke="var(--color-secondary)" strokeWidth={2} />
+                  )}
                   <Tooltip 
                     content={<ChartTooltip />}
-                    cursor={{ stroke: '#27272a', strokeWidth: 1 }}
+                    cursor={{ stroke: 'var(--color-outline-variant)', strokeWidth: 1, strokeDasharray: '3 3' }}
                   />
                   <Line
                     type="linear"
@@ -334,7 +408,7 @@ export function Dashboard({
                     dot={false}
                     isAnimationActive={false}
                     activeDot={{ 
-                      r: 5, 
+                      r: 7, 
                       fill: filteredNetBalance < 0 
                         ? 'var(--color-error)' 
                         : 'var(--color-secondary)',
@@ -348,13 +422,13 @@ export function Dashboard({
           </div>
 
           {/* Recent Transactions */}
-          <div className="flex-1 max-h-64 overflow-y-auto flex flex-col border border-[var(--color-outline)] rounded">
+          <div className="flex-1 lg:max-h-64 lg:overflow-y-auto flex flex-col border border-[var(--color-outline)] rounded">
             <div className="bg-[var(--color-surface-variant)] border-b border-[var(--color-outline)] grid grid-cols-4 px-3 py-2 shrink-0">
               <div className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase col-span-2">DESCRIPTION</div>
               <div className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase text-right">DATE</div>
               <div className="text-[10px] font-bold tracking-wider text-[var(--color-on-surface-variant)] uppercase text-right">AMOUNT</div>
             </div>
-            <div className="flex-1 overflow-y-auto bg-[var(--color-surface)]">
+            <div className="flex-1 lg:overflow-y-auto bg-[var(--color-surface)]">
               {txs.length === 0 ? (
                 <div className="p-4 text-center text-sm text-[var(--color-on-surface-variant)]">No transactions yet.</div>
               ) : (
@@ -404,10 +478,34 @@ export function Dashboard({
         </div>
       </div>
 
+      {/* Friendly Empty State Callout when no transactions exist */}
+      {transactions.filter(t => !t.deleted).length === 0 && (
+        <div className="bg-[var(--color-surface-variant)] border border-dashed border-[var(--color-outline)] rounded-lg p-5 sm:p-7 text-center flex flex-col items-center justify-center gap-2.5 shrink-0">
+          <div className="w-10 h-10 rounded-full bg-[var(--color-surface)] border border-[var(--color-outline)] flex items-center justify-center text-[var(--color-primary)]">
+            <Plus size={20} />
+          </div>
+          <div>
+            <h3 className="font-semibold text-sm sm:text-base text-[var(--color-on-surface)]">
+              No transactions yet
+            </h3>
+            <p className="text-xs sm:text-[13px] text-[var(--color-on-surface-variant)] mt-0.5 max-w-md">
+              Your financial ledger is currently empty. Tap <strong className="text-[var(--color-primary)]">+ New Transaction</strong> to record your first income or expense.
+            </p>
+          </div>
+          <button
+            onClick={onAddTransactionClick}
+            className="mt-1 bg-[var(--color-secondary)] hover:opacity-90 text-[var(--color-on-secondary)] text-xs font-bold px-3.5 py-1.5 rounded flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <Plus size={14} />
+            + New Transaction
+          </button>
+        </div>
+      )}
+
       {/* Net Loan Position Card */}
-      {loans.length > 0 && (() => {
-        const totalLent = loans.filter(l => l.type === 'lent' && l.status === 'unpaid').reduce((s, l) => s + l.amount, 0);
-        const totalBorrowed = loans.filter(l => l.type === 'borrowed' && l.status === 'unpaid').reduce((s, l) => s + l.amount, 0);
+      {loans.filter(l => !l.deleted).length > 0 && (() => {
+        const totalLent = loans.filter(l => !l.deleted && l.type === 'lent' && l.status === 'unpaid').reduce((s, l) => s + l.amount, 0);
+        const totalBorrowed = loans.filter(l => !l.deleted && l.type === 'borrowed' && l.status === 'unpaid').reduce((s, l) => s + l.amount, 0);
         const netPosition = totalLent - totalBorrowed;
         const isPositive = netPosition >= 0;
 
@@ -442,14 +540,14 @@ export function Dashboard({
         );
       })()}
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 pb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-6">
         {renderLedgerCard(businessLedgerName, "Business", businessSummary, chartDataBusiness, recentBTxs, businessPeriod, setBusinessPeriod, filteredBTxs)}
         {renderLedgerCard(personalLedgerName, "Personal", personalSummary, chartDataPersonal, recentPTxs, personalPeriod, setPersonalPeriod, filteredPTxs)}
       </div>
 
       {/* Kept Safe Elsewhere Info */}
       {(() => {
-        const totalKeptSafe = savings.filter(s => s.status === 'kept').reduce((sum, s) => sum + s.amount, 0);
+        const totalKeptSafe = savings.filter(s => !s.deleted && s.status === 'kept').reduce((sum, s) => sum + s.amount, 0);
         if (totalKeptSafe <= 0) return null;
         return (
           <div className="shrink-0 border rounded flex items-center justify-between px-4 py-3 gap-4 bg-blue-900/10 border-blue-900/30">

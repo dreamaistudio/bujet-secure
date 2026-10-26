@@ -108,8 +108,8 @@ function runVerification() {
 
   // 1. Android APKs
   const apkFiles = [
-    { label: 'Android Direct Release APK (Self-Updating)', file: path.resolve('release', 'Budget-Secure-v1.0.4.apk') },
-    { label: 'Android Store Release APK (Uptodown/Store)',   file: path.resolve('release', 'Budget-Secure-Store-v1.0.4.apk') }
+    { label: 'Android Direct Release APK (Self-Updating)', file: path.resolve('release', 'Budget-Secure-v1.1.0.apk') },
+    { label: 'Android Store Release APK (Uptodown/Store)',   file: path.resolve('release', 'Budget-Secure-Store-v1.1.0.apk') }
   ];
 
   for (const apk of apkFiles) {
@@ -136,7 +136,7 @@ function runVerification() {
 
   // 2. Windows Executables
   const winFiles = [
-    { label: 'Windows Setup Executable', file: path.resolve('release', 'Budget Secure Setup 1.0.10.exe') }
+    { label: 'Windows Setup Executable', file: path.resolve('release', 'Budget Secure Setup 1.1.0.exe') }
   ];
 
   for (const exe of winFiles) {

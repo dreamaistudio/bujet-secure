@@ -6,5 +6,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateStatus: (callback) => 
     ipcRenderer.on('update-status', (event, data) => callback(data)),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
-  restartApp: () => ipcRenderer.invoke('restart-app')
+  restartApp: () => ipcRenderer.invoke('restart-app'),
+  getFirewallStatus: () => ipcRenderer.invoke('get-firewall-status'),
+  requestFirewallRule: () => ipcRenderer.invoke('request-firewall-rule'),
+  getServerStartupError: () => ipcRenderer.invoke('get-server-startup-error')
 });
+

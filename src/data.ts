@@ -1,3 +1,7 @@
+import { Transaction } from "./types";
+
+export const initialTransactions: Transaction[] = [];
+
 export const STORAGE_KEYS = {
   transactions: "finance_vault_transactions",
   settings: "finance_vault_settings",
@@ -7,4 +11,6 @@ export const STORAGE_KEYS = {
   keepers: "finance_vault_keepers",
   bills: "finance_vault_bills",
   billPayments: "finance_vault_bill_payments",
+  syncCredentials: "finance_vault_sync_credentials"
 };
+

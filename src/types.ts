@@ -9,6 +9,7 @@ export interface Transaction {
   amount: number;
   status: 'CLEARED' | 'PENDING';
   updated_at?: number;
+  deleted?: number;
 }
 
 export interface LedgerSummary {
@@ -27,6 +28,7 @@ export interface LoanEntry {
   date: string; // YYYY-MM-DD
   status: 'unpaid' | 'paid'; // whether settled
   updated_at?: number;
+  deleted?: number;
 }
 
 export interface Keeper {
@@ -34,6 +36,8 @@ export interface Keeper {
   name: string;
   type: 'bank' | 'wallet' | 'person';
   created_at?: string;
+  updated_at?: number;
+  deleted?: number;
 }
 
 export interface SavingsEntry {
@@ -45,6 +49,7 @@ export interface SavingsEntry {
   notes?: string;
   status: 'kept' | 'withdrawn'; // kept = still with them, withdrawn = returned to me
   updated_at?: number;
+  deleted?: number;
 }
 
 export interface Bill {
@@ -68,3 +73,16 @@ export interface BillPayment {
   deleted?: number;
   updated_at?: number;
 }
+
+export interface AppSettings {
+  authPin: string;
+  biometricEnabled?: boolean;
+  currency: string;
+  lockTimer: string;
+  /** Seconds the "Undo" offer stays on screen after a delete. Chosen in Settings. */
+  undoSeconds?: number;
+  businessLedgerName: string;
+  personalLedgerName: string;
+  [key: string]: any;
+}
+

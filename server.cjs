@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const apiRouter = require('./src/server/api');
 const db = require('./src/server/database');
+const wsService = require('./src/server/websocket');
 
 async function start() {
   // Initialize SQLite/JSON database
@@ -20,9 +21,13 @@ async function start() {
   expressApp.use('/assets', express.static(assetsPath));
 
   const port = 3001;
-  expressApp.listen(port, '127.0.0.1', () => {
-    console.log(`Express sync server running on http://127.0.0.1:${port}`);
+  const server = expressApp.listen(port, '0.0.0.0', () => {
+    console.log(`Express sync server running on http://0.0.0.0:${port}`);
+    const lanIp = apiRouter.getLanIp ? apiRouter.getLanIp() : '127.0.0.1';
+    console.log(`[LAN Sync] Connectable via Wi-Fi at ws://${lanIp}:${port}/ws`);
   });
+
+  wsService.initWebSocketServer(server, () => (apiRouter.getSyncToken ? apiRouter.getSyncToken() : ''));
 }
 
 start().catch(err => {

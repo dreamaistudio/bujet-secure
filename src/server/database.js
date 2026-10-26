@@ -142,7 +142,9 @@ async function init() {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         type TEXT NOT NULL,
-        created_at TEXT
+        created_at TEXT,
+        deleted INTEGER DEFAULT 0,
+        updated_at INTEGER
       );
       CREATE TABLE IF NOT EXISTS bills (
         id TEXT PRIMARY KEY,
@@ -188,8 +190,29 @@ async function init() {
       }
     }
 
+    try {
+      dbInstance.run('ALTER TABLE keepers ADD COLUMN deleted INTEGER DEFAULT 0;');
+      saveDbToFile();
+      console.log('Added deleted column to keepers table successfully.');
+    } catch (e) {
+      if (!e.message.includes('duplicate column name') && !e.message.includes('already exists')) {
+        console.warn('Altering keepers table (deleted) failed:', e.message);
+      }
+    }
+
+    try {
+      dbInstance.run('ALTER TABLE keepers ADD COLUMN updated_at INTEGER;');
+      saveDbToFile();
+      console.log('Added updated_at column to keepers table successfully.');
+    } catch (e) {
+      if (!e.message.includes('duplicate column name') && !e.message.includes('already exists')) {
+        console.warn('Altering keepers table (updated_at) failed:', e.message);
+      }
+    }
+
     // Run migrations
     runSQLiteMigrations();
+    purgeOldTombstones();
   } catch (error) {
     dbType = 'json';
     console.warn('Could not load sql.js, falling back to JSON storage at:', jsonDbPath, '\nError:', error.message);
@@ -208,6 +231,7 @@ async function init() {
         
         // Run migration for JSON
         runJsonMigrations();
+        purgeOldTombstones();
       } catch (e) {
         console.error('Failed to read JSON database, resetting:', e);
         jsonDbData = { transactions: [], settings: {}, loans: [], savings: [], keepers: [], bills: [], billPayments: [] };
@@ -220,6 +244,31 @@ async function init() {
 }
 
 // --- DATABASE API WRAPPERS ---
+
+/**
+ * Helper to fetch a single row by ID from any table (SQLite or JSON)
+ */
+function getRowById(tableName, id) {
+  if (!id) return null;
+  if (dbType === 'sqlite' && dbInstance) {
+    try {
+      const stmt = dbInstance.prepare(`SELECT * FROM ${tableName} WHERE id = ?`);
+      stmt.bind([id]);
+      let row = null;
+      if (stmt.step()) {
+        row = stmt.getAsObject();
+      }
+      stmt.free();
+      return row;
+    } catch (err) {
+      return null;
+    }
+  } else {
+    const listKey = tableName === 'bill_payments' ? 'billPayments' : tableName;
+    const list = jsonDbData[listKey];
+    return Array.isArray(list) ? (list.find(x => x.id === id) || null) : null;
+  }
+}
 
 /**
  * Get all active (non-deleted) transactions
@@ -271,17 +320,22 @@ function getAllTransactionsRaw() {
  * Save or update a single transaction (inserts if not exists, updates if exists)
  */
 function saveTransaction(tx) {
+  if (!tx || !tx.id) return null;
+  let existing = null;
+  if (!tx.description || tx.amount === undefined || !tx.date || !tx.category) {
+    existing = getRowById('transactions', tx.id);
+  }
   const now = Date.now();
   const txData = {
     id: tx.id,
-    date: tx.date,
-    time: tx.time || null,
-    description: tx.description,
-    category: tx.category,
-    amount: parseFloat(tx.amount),
-    status: tx.status || 'CLEARED',
-    deleted: tx.deleted ? 1 : 0,
-    updated_at: tx.updated_at || now
+    date: tx.date || existing?.date || new Date().toISOString().slice(0, 10),
+    time: tx.time !== undefined ? tx.time : (existing?.time || null),
+    description: tx.description !== undefined ? tx.description : (existing?.description || 'Untitled Transaction'),
+    category: tx.category || existing?.category || 'Personal',
+    amount: tx.amount !== undefined ? parseFloat(tx.amount) : (existing?.amount !== undefined ? parseFloat(existing.amount) : 0),
+    status: tx.status || existing?.status || 'CLEARED',
+    deleted: tx.deleted !== undefined ? (tx.deleted ? 1 : 0) : (existing?.deleted ? 1 : 0),
+    updated_at: tx.updated_at || existing?.updated_at || now
   };
 
   if (dbType === 'sqlite' && dbInstance) {
@@ -328,13 +382,14 @@ function saveTransaction(tx) {
 }
 
 /**
- * Soft delete a transaction by updating its deleted flag
+ * Soft delete a transaction by updating its deleted flag with LWW
  */
-function deleteTransaction(id) {
-  const now = Date.now();
+function deleteTransaction(id, clientUpdatedAt) {
+  if (!id) return;
+  const ts = typeof clientUpdatedAt === 'number' && clientUpdatedAt > 0 ? clientUpdatedAt : Date.now();
   if (dbType === 'sqlite' && dbInstance) {
     try {
-      dbInstance.run('UPDATE transactions SET deleted = 1, updated_at = ? WHERE id = ?', [now, id]);
+      dbInstance.run('UPDATE transactions SET deleted = 1, updated_at = ? WHERE id = ? AND (updated_at <= ? OR updated_at IS NULL)', [ts, id, ts]);
       saveDbToFile();
     } catch (err) {
       console.error('sql.js deleteTransaction failed:', err);
@@ -342,9 +397,11 @@ function deleteTransaction(id) {
   } else {
     const idx = jsonDbData.transactions.findIndex(t => t.id === id);
     if (idx > -1) {
-      jsonDbData.transactions[idx].deleted = 1;
-      jsonDbData.transactions[idx].updated_at = now;
-      saveJsonDb();
+      if ((jsonDbData.transactions[idx].updated_at || 0) <= ts) {
+        jsonDbData.transactions[idx].deleted = 1;
+        jsonDbData.transactions[idx].updated_at = ts;
+        saveJsonDb();
+      }
     }
   }
 }
@@ -389,15 +446,19 @@ function getSettings() {
       return {};
     }
   } else {
-    return jsonDbData.settings;
+    return jsonDbData.settings || {};
   }
 }
 
 /**
- * Save settings values
+ * Save settings values with updated timestamp
  */
 function saveSettings(settingsObj) {
+  if (!settingsObj || typeof settingsObj !== 'object') return;
   const now = Date.now();
+  if (!settingsObj.settings_updated_at) {
+    settingsObj.settings_updated_at = now;
+  }
   if (dbType === 'sqlite' && dbInstance) {
     try {
       const stmt = dbInstance.prepare(`
@@ -438,20 +499,23 @@ function syncTransactions(clientTransactions) {
   const mergedList = [];
 
   for (const clientTx of clientTransactions) {
+    if (!clientTx || !clientTx.id) continue;
     const localTx = localMap.get(clientTx.id);
     const clientUpdatedAt = clientTx.updated_at || 0;
     const localUpdatedAt = localTx ? (localTx.updated_at || 0) : 0;
 
-    if (!localTx || clientUpdatedAt > localUpdatedAt) {
+    if (!localTx || clientUpdatedAt >= localUpdatedAt) {
       const saved = saveTransaction(clientTx);
-      mergedList.push(saved);
-      localMap.set(clientTx.id, saved);
+      if (saved) {
+        mergedList.push(saved);
+        localMap.set(clientTx.id, saved);
+      }
     } else {
       mergedList.push(localTx);
     }
   }
 
-  const clientIds = new Set(clientTransactions.map(tx => tx.id));
+  const clientIds = new Set(clientTransactions.filter(tx => tx && tx.id).map(tx => tx.id));
   for (const localTx of localTransactions) {
     if (!clientIds.has(localTx.id)) {
       mergedList.push(localTx);
@@ -491,17 +555,22 @@ function getLoans() {
  * Save or update a single loan (inserts if not exists, updates if exists)
  */
 function saveLoan(loan) {
+  if (!loan || !loan.id) return null;
+  let existing = null;
+  if (!loan.type || !loan.personName || loan.amount === undefined || !loan.date) {
+    existing = getRowById('loans', loan.id);
+  }
   const now = Date.now();
   const loanData = {
     id: loan.id,
-    type: loan.type,
-    personName: loan.personName,
-    reason: loan.reason || '',
-    amount: parseFloat(loan.amount),
-    date: loan.date,
-    status: loan.status || 'unpaid',
-    deleted: loan.deleted ? 1 : 0,
-    updated_at: loan.updated_at || now
+    type: loan.type || existing?.type || 'lent',
+    personName: loan.personName || existing?.personName || 'Unnamed Person',
+    reason: loan.reason !== undefined ? loan.reason : (existing?.reason || ''),
+    amount: loan.amount !== undefined ? parseFloat(loan.amount) : (existing?.amount !== undefined ? parseFloat(existing.amount) : 0),
+    date: loan.date || existing?.date || new Date().toISOString().slice(0, 10),
+    status: loan.status || existing?.status || 'unpaid',
+    deleted: loan.deleted !== undefined ? (loan.deleted ? 1 : 0) : (existing?.deleted ? 1 : 0),
+    updated_at: loan.updated_at || existing?.updated_at || now
   };
 
   if (dbType === 'sqlite' && dbInstance) {
@@ -549,13 +618,14 @@ function saveLoan(loan) {
 }
 
 /**
- * Soft delete a loan by updating its deleted flag
+ * Soft delete a loan by updating its deleted flag with LWW
  */
-function deleteLoan(id) {
-  const now = Date.now();
+function deleteLoan(id, clientUpdatedAt) {
+  if (!id) return;
+  const ts = typeof clientUpdatedAt === 'number' && clientUpdatedAt > 0 ? clientUpdatedAt : Date.now();
   if (dbType === 'sqlite' && dbInstance) {
     try {
-      dbInstance.run('UPDATE loans SET deleted = 1, updated_at = ? WHERE id = ?', [now, id]);
+      dbInstance.run('UPDATE loans SET deleted = 1, updated_at = ? WHERE id = ? AND (updated_at <= ? OR updated_at IS NULL)', [ts, id, ts]);
       saveDbToFile();
     } catch (err) {
       console.error('sql.js deleteLoan failed:', err);
@@ -564,9 +634,11 @@ function deleteLoan(id) {
     if (!jsonDbData.loans) jsonDbData.loans = [];
     const idx = jsonDbData.loans.findIndex(l => l.id === id);
     if (idx > -1) {
-      jsonDbData.loans[idx].deleted = 1;
-      jsonDbData.loans[idx].updated_at = now;
-      saveJsonDb();
+      if ((jsonDbData.loans[idx].updated_at || 0) <= ts) {
+        jsonDbData.loans[idx].deleted = 1;
+        jsonDbData.loans[idx].updated_at = ts;
+        saveJsonDb();
+      }
     }
   }
 }
@@ -601,17 +673,22 @@ function getSavings() {
  * Save or update a single savings entry (inserts if not exists, updates if exists)
  */
 function saveSaving(saving) {
+  if (!saving || !saving.id) return null;
+  let existing = null;
+  if (!saving.keeperName || saving.amount === undefined || !saving.date) {
+    existing = getRowById('savings', saving.id);
+  }
   const now = Date.now();
   const savingData = {
     id: saving.id,
-    keeperName: saving.keeperName,
-    keeper_id: saving.keeper_id || null,
-    amount: parseFloat(saving.amount),
-    date: saving.date,
-    notes: saving.notes || '',
-    status: saving.status || 'kept',
-    deleted: saving.deleted ? 1 : 0,
-    updated_at: saving.updated_at || now
+    keeperName: saving.keeperName || existing?.keeperName || 'Unnamed Keeper',
+    keeper_id: saving.keeper_id !== undefined ? saving.keeper_id : (existing?.keeper_id || null),
+    amount: saving.amount !== undefined ? parseFloat(saving.amount) : (existing?.amount !== undefined ? parseFloat(existing.amount) : 0),
+    date: saving.date || existing?.date || new Date().toISOString().slice(0, 10),
+    notes: saving.notes !== undefined ? saving.notes : (existing?.notes || ''),
+    status: saving.status || existing?.status || 'kept',
+    deleted: saving.deleted !== undefined ? (saving.deleted ? 1 : 0) : (existing?.deleted ? 1 : 0),
+    updated_at: saving.updated_at || existing?.updated_at || now
   };
 
   if (dbType === 'sqlite' && dbInstance) {
@@ -659,12 +736,12 @@ function saveSaving(saving) {
 }
 
 /**
- * Get all keepers
+ * Get all active (non-deleted) keepers
  */
 function getKeepers() {
   if (dbType === 'sqlite' && dbInstance) {
     try {
-      const stmt = dbInstance.prepare('SELECT * FROM keepers ORDER BY name ASC');
+      const stmt = dbInstance.prepare('SELECT * FROM keepers WHERE deleted = 0 ORDER BY name ASC');
       const rows = [];
       while (stmt.step()) {
         rows.push(stmt.getAsObject());
@@ -677,7 +754,30 @@ function getKeepers() {
     }
   } else {
     return (jsonDbData.keepers || [])
+      .filter(k => !k.deleted)
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+}
+
+/**
+ * Get all keepers (including soft-deleted ones) - for sync purposes
+ */
+function getAllKeepersRaw() {
+  if (dbType === 'sqlite' && dbInstance) {
+    try {
+      const stmt = dbInstance.prepare('SELECT * FROM keepers ORDER BY name ASC');
+      const rows = [];
+      while (stmt.step()) {
+        rows.push(stmt.getAsObject());
+      }
+      stmt.free();
+      return rows;
+    } catch (err) {
+      console.error('sql.js getAllKeepersRaw failed:', err);
+      return [];
+    }
+  } else {
+    return jsonDbData.keepers || [];
   }
 }
 
@@ -685,27 +785,39 @@ function getKeepers() {
  * Save or update a single keeper (inserts if not exists, updates if exists)
  */
 function saveKeeper(keeper) {
+  if (!keeper || !keeper.id) return null;
+  let existing = null;
+  if (!keeper.name || !keeper.type) {
+    existing = getRowById('keepers', keeper.id);
+  }
+  const now = Date.now();
   const keeperData = {
     id: keeper.id,
-    name: keeper.name,
-    type: keeper.type,
-    created_at: keeper.created_at || new Date().toISOString()
+    name: keeper.name || existing?.name || 'Unnamed Keeper',
+    type: keeper.type || existing?.type || 'person',
+    created_at: keeper.created_at || existing?.created_at || new Date().toISOString(),
+    deleted: keeper.deleted !== undefined ? Number(keeper.deleted) : (existing?.deleted !== undefined ? Number(existing.deleted) : 0),
+    updated_at: keeper.updated_at || existing?.updated_at || now
   };
 
   if (dbType === 'sqlite' && dbInstance) {
     try {
       const stmt = dbInstance.prepare(`
-        INSERT INTO keepers (id, name, type, created_at)
-        VALUES ($id, $name, $type, $created_at)
+        INSERT INTO keepers (id, name, type, created_at, deleted, updated_at)
+        VALUES ($id, $name, $type, $created_at, $deleted, $updated_at)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
-          type = excluded.type
+          type = excluded.type,
+          deleted = excluded.deleted,
+          updated_at = excluded.updated_at
       `);
       stmt.run({
         $id: keeperData.id,
         $name: keeperData.name,
         $type: keeperData.type,
-        $created_at: keeperData.created_at
+        $created_at: keeperData.created_at,
+        $deleted: keeperData.deleted,
+        $updated_at: keeperData.updated_at
       });
       stmt.free();
       saveDbToFile();
@@ -726,20 +838,28 @@ function saveKeeper(keeper) {
 }
 
 /**
- * Delete a keeper
+ * Soft delete a keeper with LWW check
  */
-function deleteKeeper(id) {
+function deleteKeeper(id, clientUpdatedAt) {
+  if (!id) return;
+  const ts = typeof clientUpdatedAt === 'number' && clientUpdatedAt > 0 ? clientUpdatedAt : Date.now();
   if (dbType === 'sqlite' && dbInstance) {
     try {
-      dbInstance.run('DELETE FROM keepers WHERE id = ?', [id]);
+      dbInstance.run('UPDATE keepers SET deleted = 1, updated_at = ? WHERE id = ? AND (updated_at <= ? OR updated_at IS NULL)', [ts, id, ts]);
       saveDbToFile();
     } catch (err) {
       console.error('sql.js deleteKeeper failed:', err);
     }
   } else {
     if (!jsonDbData.keepers) jsonDbData.keepers = [];
-    jsonDbData.keepers = jsonDbData.keepers.filter(k => k.id !== id);
-    saveJsonDb();
+    const idx = jsonDbData.keepers.findIndex(k => k.id === id);
+    if (idx > -1) {
+      if ((jsonDbData.keepers[idx].updated_at || 0) <= ts) {
+        jsonDbData.keepers[idx].deleted = 1;
+        jsonDbData.keepers[idx].updated_at = ts;
+        saveJsonDb();
+      }
+    }
   }
 }
 
@@ -750,6 +870,7 @@ function isKeeperReferenced(id) {
   if (dbType === 'sqlite' && dbInstance) {
     try {
       const stmt = dbInstance.prepare('SELECT COUNT(*) as count FROM savings WHERE keeper_id = ? AND deleted = 0');
+      stmt.bind([id]);
       let count = 0;
       if (stmt.step()) {
         count = stmt.getAsObject().count;
@@ -767,33 +888,31 @@ function isKeeperReferenced(id) {
 }
 
 /**
- * Sync and merge keepers using simple merge
+ * Sync and merge keepers using Last-Write-Wins (LWW)
  */
 function syncKeepers(clientKeepers) {
   if (!clientKeepers || !Array.isArray(clientKeepers)) return [];
-  const localKeepers = getKeepers();
+  const localKeepers = getAllKeepersRaw();
   const localMap = new Map(localKeepers.map(k => [k.id, k]));
-  const mergedList = [];
 
   for (const clientKeeper of clientKeepers) {
+    if (!clientKeeper || !clientKeeper.id) continue;
     const localKeeper = localMap.get(clientKeeper.id);
+    const clientUpdatedAt = clientKeeper.updated_at || 0;
+
     if (!localKeeper) {
-      const saved = saveKeeper(clientKeeper);
-      mergedList.push(saved);
-      localMap.set(clientKeeper.id, saved);
+      saveKeeper(clientKeeper);
+      localMap.set(clientKeeper.id, clientKeeper);
     } else {
-      mergedList.push(localKeeper);
+      const localUpdatedAt = localKeeper.updated_at || 0;
+      if (clientUpdatedAt >= localUpdatedAt) {
+        saveKeeper(clientKeeper);
+        localMap.set(clientKeeper.id, clientKeeper);
+      }
     }
   }
 
-  const clientIds = new Set(clientKeepers.map(k => k.id));
-  for (const localKeeper of localKeepers) {
-    if (!clientIds.has(localKeeper.id)) {
-      mergedList.push(localKeeper);
-    }
-  }
-
-  return mergedList;
+  return getAllKeepersRaw();
 }
 
 /**
@@ -848,8 +967,8 @@ function runSQLiteMigrations() {
         const createdAt = new Date().toISOString();
         if (!id) {
           id = 'keeper_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
-          const insertStmt = dbInstance.prepare('INSERT INTO keepers (id, name, type, created_at) VALUES (?, ?, ?, ?)');
-          insertStmt.run([id, name, 'person', createdAt]);
+          const insertStmt = dbInstance.prepare('INSERT INTO keepers (id, name, type, created_at, deleted, updated_at) VALUES (?, ?, ?, ?, 0, ?)');
+          insertStmt.run([id, name, 'person', createdAt, Date.now()]);
           insertStmt.free();
           keepersCreated++;
         }
@@ -910,7 +1029,9 @@ function runJsonMigrations() {
           id,
           name,
           type: 'person',
-          created_at: createdAt
+          created_at: createdAt,
+          deleted: 0,
+          updated_at: Date.now()
         });
         keepersCreated++;
       }
@@ -924,6 +1045,12 @@ function runJsonMigrations() {
       });
     }
 
+    // Default missing fields on existing JSON keepers
+    jsonDbData.keepers.forEach(k => {
+      if (k.deleted === undefined) k.deleted = 0;
+      if (k.updated_at === undefined) k.updated_at = Date.now();
+    });
+
     if (keepersCreated > 0 || savingsMigrated > 0) {
       saveJsonDb();
     }
@@ -932,13 +1059,14 @@ function runJsonMigrations() {
 }
 
 /**
- * Soft delete a savings entry by updating its deleted flag
+ * Soft delete a savings entry by updating its deleted flag with LWW
  */
-function deleteSaving(id) {
-  const now = Date.now();
+function deleteSaving(id, clientUpdatedAt) {
+  if (!id) return;
+  const ts = typeof clientUpdatedAt === 'number' && clientUpdatedAt > 0 ? clientUpdatedAt : Date.now();
   if (dbType === 'sqlite' && dbInstance) {
     try {
-      dbInstance.run('UPDATE savings SET deleted = 1, updated_at = ? WHERE id = ?', [now, id]);
+      dbInstance.run('UPDATE savings SET deleted = 1, updated_at = ? WHERE id = ? AND (updated_at <= ? OR updated_at IS NULL)', [ts, id, ts]);
       saveDbToFile();
     } catch (err) {
       console.error('sql.js deleteSaving failed:', err);
@@ -947,9 +1075,11 @@ function deleteSaving(id) {
     if (!jsonDbData.savings) jsonDbData.savings = [];
     const idx = jsonDbData.savings.findIndex(s => s.id === id);
     if (idx > -1) {
-      jsonDbData.savings[idx].deleted = 1;
-      jsonDbData.savings[idx].updated_at = now;
-      saveJsonDb();
+      if ((jsonDbData.savings[idx].updated_at || 0) <= ts) {
+        jsonDbData.savings[idx].deleted = 1;
+        jsonDbData.savings[idx].updated_at = ts;
+        saveJsonDb();
+      }
     }
   }
 }
@@ -964,10 +1094,11 @@ function resetAll() {
       dbInstance.run('DELETE FROM settings');
       try { dbInstance.run('DELETE FROM loans'); } catch (e) { /* table may not exist yet */ }
       try { dbInstance.run('DELETE FROM savings'); } catch (e) { /* table may not exist yet */ }
+      try { dbInstance.run('DELETE FROM keepers'); } catch (e) { /* table may not exist yet */ }
       try { dbInstance.run('DELETE FROM bills'); } catch (e) { /* table may not exist yet */ }
       try { dbInstance.run('DELETE FROM bill_payments'); } catch (e) { /* table may not exist yet */ }
       saveDbToFile();
-      console.log('Database reset: all transactions, loans, savings, bills, and settings cleared.');
+      console.log('Database reset: all transactions, loans, savings, keepers, bills, and settings cleared.');
     } catch (err) {
       console.error('sql.js resetAll failed:', err);
     }
@@ -976,10 +1107,11 @@ function resetAll() {
     jsonDbData.settings = {};
     jsonDbData.loans = [];
     jsonDbData.savings = [];
+    jsonDbData.keepers = [];
     jsonDbData.bills = [];
     jsonDbData.billPayments = [];
     saveJsonDb();
-    console.log('JSON database reset: all transactions, loans, savings, bills, and settings cleared.');
+    console.log('JSON database reset: all transactions, loans, savings, keepers, bills, and settings cleared.');
   }
 }
 
@@ -1037,20 +1169,23 @@ function syncLoans(clientLoans) {
   const mergedList = [];
 
   for (const clientLoan of clientLoans) {
+    if (!clientLoan || !clientLoan.id) continue;
     const localLoan = localMap.get(clientLoan.id);
     const clientUpdatedAt = clientLoan.updated_at || 0;
     const localUpdatedAt = localLoan ? (localLoan.updated_at || 0) : 0;
 
-    if (!localLoan || clientUpdatedAt > localUpdatedAt) {
+    if (!localLoan || clientUpdatedAt >= localUpdatedAt) {
       const saved = saveLoan(clientLoan);
-      mergedList.push(saved);
-      localMap.set(clientLoan.id, saved);
+      if (saved) {
+        mergedList.push(saved);
+        localMap.set(clientLoan.id, saved);
+      }
     } else {
       mergedList.push(localLoan);
     }
   }
 
-  const clientIds = new Set(clientLoans.map(l => l.id));
+  const clientIds = new Set(clientLoans.filter(l => l && l.id).map(l => l.id));
   for (const localLoan of localLoans) {
     if (!clientIds.has(localLoan.id)) {
       mergedList.push(localLoan);
@@ -1070,20 +1205,23 @@ function syncSavings(clientSavings) {
   const mergedList = [];
 
   for (const clientSaving of clientSavings) {
+    if (!clientSaving || !clientSaving.id) continue;
     const localSaving = localMap.get(clientSaving.id);
     const clientUpdatedAt = clientSaving.updated_at || 0;
     const localUpdatedAt = localSaving ? (localSaving.updated_at || 0) : 0;
 
-    if (!localSaving || clientUpdatedAt > localUpdatedAt) {
+    if (!localSaving || clientUpdatedAt >= localUpdatedAt) {
       const saved = saveSaving(clientSaving);
-      mergedList.push(saved);
-      localMap.set(clientSaving.id, saved);
+      if (saved) {
+        mergedList.push(saved);
+        localMap.set(clientSaving.id, saved);
+      }
     } else {
       mergedList.push(localSaving);
     }
   }
 
-  const clientIds = new Set(clientSavings.map(s => s.id));
+  const clientIds = new Set(clientSavings.filter(s => s && s.id).map(s => s.id));
   for (const localSaving of localSavings) {
     if (!clientIds.has(localSaving.id)) {
       mergedList.push(localSaving);
@@ -1123,16 +1261,21 @@ function getBills() {
  * Save or update a single bill (inserts if not exists, updates if exists)
  */
 function saveBill(bill) {
+  if (!bill || !bill.id) return null;
+  let existing = null;
+  if (!bill.name || bill.amount === undefined || bill.dueDay === undefined) {
+    existing = getRowById('bills', bill.id);
+  }
   const now = Date.now();
   const billData = {
     id: bill.id,
-    name: bill.name,
-    amount: parseFloat(bill.amount),
-    dueDay: parseInt(bill.dueDay),
-    category: bill.category || 'Personal',
-    notes: bill.notes || '',
-    deleted: bill.deleted ? 1 : 0,
-    updated_at: bill.updated_at || now
+    name: bill.name || existing?.name || 'Unnamed Bill',
+    amount: bill.amount !== undefined ? parseFloat(bill.amount) : (existing?.amount !== undefined ? parseFloat(existing.amount) : 0),
+    dueDay: bill.dueDay !== undefined ? parseInt(bill.dueDay) : (existing?.dueDay !== undefined ? parseInt(existing.dueDay) : 1),
+    category: bill.category || existing?.category || 'Personal',
+    notes: bill.notes !== undefined ? bill.notes : (existing?.notes || ''),
+    deleted: bill.deleted !== undefined ? (bill.deleted ? 1 : 0) : (existing?.deleted ? 1 : 0),
+    updated_at: bill.updated_at || existing?.updated_at || now
   };
 
   if (dbType === 'sqlite' && dbInstance) {
@@ -1178,14 +1321,14 @@ function saveBill(bill) {
 }
 
 /**
- * Soft delete a bill by updating its deleted flag.
- * Does NOT touch bill_payments (historical records preserved).
+ * Soft delete a bill by updating its deleted flag with LWW
  */
-function deleteBill(id) {
-  const now = Date.now();
+function deleteBill(id, clientUpdatedAt) {
+  if (!id) return;
+  const ts = typeof clientUpdatedAt === 'number' && clientUpdatedAt > 0 ? clientUpdatedAt : Date.now();
   if (dbType === 'sqlite' && dbInstance) {
     try {
-      dbInstance.run('UPDATE bills SET deleted = 1, updated_at = ? WHERE id = ?', [now, id]);
+      dbInstance.run('UPDATE bills SET deleted = 1, updated_at = ? WHERE id = ? AND (updated_at <= ? OR updated_at IS NULL)', [ts, id, ts]);
       saveDbToFile();
     } catch (err) {
       console.error('sql.js deleteBill failed:', err);
@@ -1194,9 +1337,11 @@ function deleteBill(id) {
     if (!jsonDbData.bills) jsonDbData.bills = [];
     const idx = jsonDbData.bills.findIndex(b => b.id === id);
     if (idx > -1) {
-      jsonDbData.bills[idx].deleted = 1;
-      jsonDbData.bills[idx].updated_at = now;
-      saveJsonDb();
+      if ((jsonDbData.bills[idx].updated_at || 0) <= ts) {
+        jsonDbData.bills[idx].deleted = 1;
+        jsonDbData.bills[idx].updated_at = ts;
+        saveJsonDb();
+      }
     }
   }
 }
@@ -1233,20 +1378,23 @@ function syncBills(clientBills) {
   const mergedList = [];
 
   for (const clientBill of clientBills) {
+    if (!clientBill || !clientBill.id) continue;
     const localBill = localMap.get(clientBill.id);
     const clientUpdatedAt = clientBill.updated_at || 0;
     const localUpdatedAt = localBill ? (localBill.updated_at || 0) : 0;
 
-    if (!localBill || clientUpdatedAt > localUpdatedAt) {
+    if (!localBill || clientUpdatedAt >= localUpdatedAt) {
       const saved = saveBill(clientBill);
-      mergedList.push(saved);
-      localMap.set(clientBill.id, saved);
+      if (saved) {
+        mergedList.push(saved);
+        localMap.set(clientBill.id, saved);
+      }
     } else {
       mergedList.push(localBill);
     }
   }
 
-  const clientIds = new Set(clientBills.map(b => b.id));
+  const clientIds = new Set(clientBills.filter(b => b && b.id).map(b => b.id));
   for (const localBill of localBills) {
     if (!clientIds.has(localBill.id)) {
       mergedList.push(localBill);
@@ -1286,16 +1434,21 @@ function getBillPayments() {
  * Save or update a single bill payment (inserts if not exists, updates if exists)
  */
 function saveBillPayment(payment) {
+  if (!payment || !payment.id) return null;
+  let existing = null;
+  if (!payment.bill_id || !payment.month) {
+    existing = getRowById('bill_payments', payment.id);
+  }
   const now = Date.now();
   const paymentData = {
     id: payment.id,
-    bill_id: payment.bill_id,
-    month: payment.month,
-    paid: payment.paid ? 1 : 0,
-    paid_date: payment.paid_date || null,
-    linked_transaction_id: payment.linked_transaction_id || null,
-    deleted: payment.deleted ? 1 : 0,
-    updated_at: payment.updated_at || now
+    bill_id: payment.bill_id || existing?.bill_id || '',
+    month: payment.month || existing?.month || '',
+    paid: payment.paid !== undefined ? (payment.paid ? 1 : 0) : (existing?.paid ? 1 : 0),
+    paid_date: payment.paid_date !== undefined ? payment.paid_date : (existing?.paid_date || null),
+    linked_transaction_id: payment.linked_transaction_id !== undefined ? payment.linked_transaction_id : (existing?.linked_transaction_id || null),
+    deleted: payment.deleted !== undefined ? (payment.deleted ? 1 : 0) : (existing?.deleted ? 1 : 0),
+    updated_at: payment.updated_at || existing?.updated_at || now
   };
 
   if (dbType === 'sqlite' && dbInstance) {
@@ -1341,13 +1494,14 @@ function saveBillPayment(payment) {
 }
 
 /**
- * Soft delete a bill payment by updating its deleted flag
+ * Soft delete a bill payment by updating its deleted flag with LWW
  */
-function deleteBillPayment(id) {
-  const now = Date.now();
+function deleteBillPayment(id, clientUpdatedAt) {
+  if (!id) return;
+  const ts = typeof clientUpdatedAt === 'number' && clientUpdatedAt > 0 ? clientUpdatedAt : Date.now();
   if (dbType === 'sqlite' && dbInstance) {
     try {
-      dbInstance.run('UPDATE bill_payments SET deleted = 1, updated_at = ? WHERE id = ?', [now, id]);
+      dbInstance.run('UPDATE bill_payments SET deleted = 1, updated_at = ? WHERE id = ? AND (updated_at <= ? OR updated_at IS NULL)', [ts, id, ts]);
       saveDbToFile();
     } catch (err) {
       console.error('sql.js deleteBillPayment failed:', err);
@@ -1356,9 +1510,11 @@ function deleteBillPayment(id) {
     if (!jsonDbData.billPayments) jsonDbData.billPayments = [];
     const idx = jsonDbData.billPayments.findIndex(bp => bp.id === id);
     if (idx > -1) {
-      jsonDbData.billPayments[idx].deleted = 1;
-      jsonDbData.billPayments[idx].updated_at = now;
-      saveJsonDb();
+      if ((jsonDbData.billPayments[idx].updated_at || 0) <= ts) {
+        jsonDbData.billPayments[idx].deleted = 1;
+        jsonDbData.billPayments[idx].updated_at = ts;
+        saveJsonDb();
+      }
     }
   }
 }
@@ -1397,13 +1553,16 @@ function syncBillPayments(clientPayments) {
 
   // Standard LWW merge by id
   for (const clientBp of clientPayments) {
+    if (!clientBp || !clientBp.id) continue;
     const localBp = localMap.get(clientBp.id);
     const clientUpdatedAt = clientBp.updated_at || 0;
     const localUpdatedAt = localBp ? (localBp.updated_at || 0) : 0;
 
-    if (!localBp || clientUpdatedAt > localUpdatedAt) {
+    if (!localBp || clientUpdatedAt >= localUpdatedAt) {
       const saved = saveBillPayment(clientBp);
-      localMap.set(clientBp.id, saved);
+      if (saved) {
+        localMap.set(clientBp.id, saved);
+      }
     }
   }
 
@@ -1417,9 +1576,9 @@ function syncBillPayments(clientPayments) {
     if (!existing) {
       activeByKey.set(key, bp);
     } else {
-      const keepBp = (bp.updated_at || 0) > (existing.updated_at || 0) ? bp : existing;
+      const keepBp = (bp.updated_at || 0) >= (existing.updated_at || 0) ? bp : existing;
       const loseBp = keepBp === bp ? existing : bp;
-      deleteBillPayment(loseBp.id);
+      deleteBillPayment(loseBp.id, Date.now());
       activeByKey.set(key, keepBp);
     }
   }
@@ -1427,11 +1586,89 @@ function syncBillPayments(clientPayments) {
   return getAllBillPaymentsRaw();
 }
 
+/**
+ * Atomic bulk sync: merges all entities and settings within a single SQLite transaction
+ */
+function bulkSync(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  if (dbType === 'sqlite' && dbInstance) {
+    try {
+      dbInstance.run('BEGIN TRANSACTION');
+      if (Array.isArray(payload.transactions)) syncTransactions(payload.transactions);
+      if (Array.isArray(payload.loans)) syncLoans(payload.loans);
+      if (Array.isArray(payload.savings)) syncSavings(payload.savings);
+      if (Array.isArray(payload.keepers)) syncKeepers(payload.keepers);
+      if (Array.isArray(payload.bills)) syncBills(payload.bills);
+      if (Array.isArray(payload.billPayments)) syncBillPayments(payload.billPayments);
+      if (payload.settings && typeof payload.settings === 'object') saveSettings(payload.settings);
+      dbInstance.run('COMMIT');
+      saveDbToFile();
+      console.log('[BulkSync] Atomic transaction completed successfully');
+      return true;
+    } catch (err) {
+      try { dbInstance.run('ROLLBACK'); } catch {}
+      console.error('[BulkSync] Atomic transaction failed and rolled back:', err);
+      throw err;
+    }
+  } else {
+    if (Array.isArray(payload.transactions)) syncTransactions(payload.transactions);
+    if (Array.isArray(payload.loans)) syncLoans(payload.loans);
+    if (Array.isArray(payload.savings)) syncSavings(payload.savings);
+    if (Array.isArray(payload.keepers)) syncKeepers(payload.keepers);
+    if (Array.isArray(payload.bills)) syncBills(payload.bills);
+    if (Array.isArray(payload.billPayments)) syncBillPayments(payload.billPayments);
+    if (payload.settings && typeof payload.settings === 'object') saveSettings(payload.settings);
+    saveJsonDb();
+    return true;
+  }
+}
+
+/**
+ * Tombstone garbage collection: purge soft-deleted records older than maxAgeMs (default 30 days)
+ */
+function purgeOldTombstones(maxAgeMs = 30 * 24 * 60 * 60 * 1000) {
+  const cutoff = Date.now() - maxAgeMs;
+  if (dbType === 'sqlite' && dbInstance) {
+    try {
+      dbInstance.run('DELETE FROM transactions WHERE deleted = 1 AND updated_at < ?', [cutoff]);
+      dbInstance.run('DELETE FROM loans WHERE deleted = 1 AND updated_at < ?', [cutoff]);
+      dbInstance.run('DELETE FROM savings WHERE deleted = 1 AND updated_at < ?', [cutoff]);
+      dbInstance.run('DELETE FROM keepers WHERE deleted = 1 AND updated_at < ?', [cutoff]);
+      dbInstance.run('DELETE FROM bills WHERE deleted = 1 AND updated_at < ?', [cutoff]);
+      dbInstance.run('DELETE FROM bill_payments WHERE deleted = 1 AND updated_at < ?', [cutoff]);
+      saveDbToFile();
+      console.log('[Tombstone GC] Cleaned up SQLite tombstones older than 30 days');
+    } catch (err) {
+      console.error('[Tombstone GC] Failed SQLite tombstone cleanup:', err);
+    }
+  } else {
+    const filterFn = item => !(item.deleted && (item.updated_at || 0) < cutoff);
+    if (jsonDbData.transactions) jsonDbData.transactions = jsonDbData.transactions.filter(filterFn);
+    if (jsonDbData.loans) jsonDbData.loans = jsonDbData.loans.filter(filterFn);
+    if (jsonDbData.savings) jsonDbData.savings = jsonDbData.savings.filter(filterFn);
+    if (jsonDbData.keepers) jsonDbData.keepers = jsonDbData.keepers.filter(filterFn);
+    if (jsonDbData.bills) jsonDbData.bills = jsonDbData.bills.filter(filterFn);
+    if (jsonDbData.billPayments) jsonDbData.billPayments = jsonDbData.billPayments.filter(filterFn);
+    saveJsonDb();
+    console.log('[Tombstone GC] Cleaned up JSON tombstones older than 30 days');
+  }
+}
+
 module.exports = {
   dbType,
+  /**
+   * Which database is actually in use, right now.
+   *
+   * `dbType` above is copied out once when this file is first loaded, while
+   * it still says 'json' — SQLite is only chosen later, inside init(). So the
+   * exported copy is frozen at the wrong answer forever. This reads the live
+   * value instead, and is what anything outside this file should ask.
+   */
+  getDbType: () => dbType,
   dbPath,
   jsonDbPath,
   init,
+  getRowById,
   getTransactions,
   getAllTransactionsRaw,
   saveTransaction,
@@ -1451,6 +1688,7 @@ module.exports = {
   deleteSaving,
   syncSavings,
   getKeepers,
+  getAllKeepersRaw,
   saveKeeper,
   deleteKeeper,
   isKeeperReferenced,
@@ -1465,6 +1703,8 @@ module.exports = {
   saveBillPayment,
   deleteBillPayment,
   syncBillPayments,
+  bulkSync,
+  purgeOldTombstones,
   resetAll
 };
 

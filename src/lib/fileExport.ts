@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 
-interface ExportFileOptions {
+export interface ExportFileOptions {
   filename: string;
   blob: Blob;
   base64Data: string;
@@ -23,40 +23,55 @@ export function stringToBase64(str: string): string {
 }
 
 /**
- * Clean up old export files matching the given pattern from Directory.Documents
+ * Clear out the app's own leftover export files.
+ *
+ * Only the cache is swept. This used to clear the phone's Documents folder as
+ * well, which is not the app's to tidy: a statement saved there is something
+ * the user chose to keep, and a file of their own that happened to match the
+ * pattern — a "transactions_2024.csv" downloaded from a bank, say — would have
+ * been deleted without a word. The cache is scratch space and safe to clear;
+ * Documents belongs to the user, and is now left alone.
  */
 async function cleanupOldExports(pattern: RegExp): Promise<void> {
-  try {
-    const dirResult = await Filesystem.readdir({
-      directory: Directory.Documents,
-      path: '',
-    });
+  const targetDirs = [Directory.Cache];
 
-    if (!dirResult || !dirResult.files) return;
+  for (const dir of targetDirs) {
+    try {
+      const dirResult = await Filesystem.readdir({
+        directory: dir,
+        path: '',
+      });
 
-    for (const file of dirResult.files) {
-      if (file && file.name && pattern.test(file.name)) {
-        try {
-          await Filesystem.deleteFile({
-            directory: Directory.Documents,
-            path: file.name,
-          });
-          console.log(`[Export] Cleaned up previous export: ${file.name}`);
-        } catch (delErr) {
-          console.warn(`[Export] Failed to delete previous export ${file.name}:`, delErr);
+      if (!dirResult || !dirResult.files) continue;
+
+      for (const file of dirResult.files) {
+        if (file && file.name && pattern.test(file.name)) {
+          try {
+            await Filesystem.deleteFile({
+              directory: dir,
+              path: file.name,
+            });
+            console.log(`[Export] Cleaned up previous export: ${file.name}`);
+          } catch (delErr) {
+            console.warn(`[Export] Failed to delete previous export ${file.name}:`, delErr);
+          }
         }
       }
+    } catch (err) {
+      // Directory may be empty or uninitialized, which is safe to ignore
+      console.debug('[Export] Cleanup check completed or skipped:', err);
     }
-  } catch (err) {
-    // Directory might be empty or uninitialized, which is safe to ignore
-    console.debug('[Export] Cleanup check completed or skipped:', err);
   }
 }
 
 /**
- * Universal file export handler:
- * - On Native Android: cleans up old exports, writes to Directory.Documents as base64, and opens native Share sheet
- * - On Web / Electron: triggers standard browser blob download via <a> element
+ * Universal platform-aware file export handler:
+ * - On Native Android (Capacitor):
+ *   1. Cleans up old exports matching pattern
+ *   2. Writes file via Filesystem.writeFile() to Directory.Documents (fallback to Directory.Cache)
+ *   3. Triggers native Android Share sheet via Share.share() with the file URI
+ * - On Web / Electron:
+ *   Standard browser blob download via <a> element
  */
 export async function exportFile({
   filename,
@@ -85,13 +100,24 @@ export async function exportFile({
       ? base64Data.split(',')[1]
       : base64Data;
 
-    // Write file to Directory.Documents
-    const writeResult = await Filesystem.writeFile({
-      path: filename,
-      data: cleanBase64,
-      directory: Directory.Documents,
-      recursive: true,
-    });
+    // Write file to Directory.Documents with fallback to Directory.Cache
+    let writeResult;
+    try {
+      writeResult = await Filesystem.writeFile({
+        path: filename,
+        data: cleanBase64,
+        directory: Directory.Documents,
+        recursive: true,
+      });
+    } catch (docErr) {
+      console.warn('[Export] Writing to Directory.Documents failed, falling back to Directory.Cache:', docErr);
+      writeResult = await Filesystem.writeFile({
+        path: filename,
+        data: cleanBase64,
+        directory: Directory.Cache,
+        recursive: true,
+      });
+    }
 
     console.log(`[Export] File written successfully: ${writeResult.uri}`);
 
@@ -109,7 +135,21 @@ export async function exportFile({
       if (shareErr?.message && /cancel|dismiss/i.test(shareErr.message)) {
         console.log('[Export] Share sheet dismissed by user');
       } else {
-        throw shareErr;
+        // Fallback: try sharing with files array only
+        try {
+          await Share.share({
+            title: filename,
+            files: [writeResult.uri],
+            dialogTitle: 'Save or Share Statement',
+          });
+        } catch (retryErr: any) {
+          if (retryErr?.message && /cancel|dismiss/i.test(retryErr.message)) {
+            console.log('[Export] Share sheet dismissed by user on retry');
+          } else {
+            console.error('[Export] Native share failed:', retryErr);
+            throw retryErr;
+          }
+        }
       }
     }
   } else {

@@ -49,7 +49,7 @@ export function UpdateNotification() {
             setShow(true);
           } else if (data.status === 'failed') {
             setStatus('failed');
-            setErrorMessage(data.error || 'Download failed');
+            setErrorMessage(data.error || 'Could not download update. Check your internet connection and try again.');
             setShow(true);
           }
         }).then((handle) => {
@@ -70,6 +70,9 @@ export function UpdateNotification() {
       if (detail.downloadUrl) setDownloadUrl(detail.downloadUrl);
       if (typeof detail.progress === 'number') setProgress(detail.progress);
       if (detail.error) setErrorMessage(detail.error);
+      if (detail.status === 'failed' && !detail.error) {
+        setErrorMessage('Could not download update. Check your internet connection and try again.');
+      }
       setShow(true);
     };
 
@@ -93,26 +96,20 @@ export function UpdateNotification() {
           setProgress(100);
           setShow(true);
         } else if (data.status === 'error') {
-          setStatus('failed');
-          setErrorMessage('Failed to download update.');
-          setShow(true);
+          // Only show modal if a download was actually in progress or initiated
+          if (data.stage === 'downloading') {
+            setStatus('failed');
+            setErrorMessage(data.message || 'Could not download update. Check your internet connection and try again.');
+            setShow(true);
+          }
         }
       });
     }
-
-    // Developer mock test helper
-    (window as any).__triggerMockUpdate = (mockStatus: any, mockVersion: string) => {
-      setStatus(mockStatus);
-      setVersion(mockVersion);
-      setProgress(mockStatus === 'downloaded' ? 100 : 45);
-      setShow(true);
-    };
 
     return () => {
       unmounted = true;
       window.removeEventListener('app-update-event', handleCustomEvent);
       if (removeListener) removeListener();
-      delete (window as any).__triggerMockUpdate;
     };
   }, []);
 
@@ -130,7 +127,7 @@ export function UpdateNotification() {
         await NativeAppUpdate.startDownload({ url: downloadUrl, version });
       } catch (err: any) {
         console.error('Android startDownload error:', err);
-        setErrorMessage(err?.message || 'Failed to start download');
+        setErrorMessage(err?.message || 'Could not download update. Check your internet connection and try again.');
         setStatus('failed');
       }
     } else if (platform === 'electron') {
@@ -251,7 +248,7 @@ export function UpdateNotification() {
 
           {status === 'failed' && (
             <span className="text-[var(--color-error)] font-medium">
-              {errorMessage || 'Failed to download the update. Please check your internet connection.'}
+              {errorMessage || 'Could not download update. Check your internet connection and try again.'}
             </span>
           )}
 
